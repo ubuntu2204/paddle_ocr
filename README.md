@@ -1,5 +1,7 @@
 # paddle_ocr
 
+English | [简体中文](README_zh.md)
+
 A Flutter plugin for offline OCR (Optical Character Recognition) on Windows, powered by PaddleOCR's PP-OCRv6 models and ONNX Runtime.
 
 ## Features
