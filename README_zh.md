@@ -36,9 +36,7 @@
 
 ```yaml
 dependencies:
-  paddle_ocr:
-    git:
-      url: https://github.com/yourusername/paddle_ocr.git
+  paddle_ocr: ^0.1.0
 ```
 
 ## 模型文件
