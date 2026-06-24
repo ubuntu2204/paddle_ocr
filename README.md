@@ -36,9 +36,7 @@ Add this to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  paddle_ocr:
-    git:
-      url: https://github.com/yourusername/paddle_ocr.git
+  pp_ocr: ^0.1.0
 ```
 
 ## Model Files
