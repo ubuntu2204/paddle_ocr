@@ -93,4 +93,11 @@ for (final result in results) {
 
 ## 许可证
 
-详见 [LICENSE](LICENSE)。
+本项目基于 [MIT 许可证](LICENSE) 开源。
+
+本项目使用了以下第三方组件：
+- [OpenCV](https://opencv.org/)（Apache License 2.0）
+- [PaddleOCR PP-OCRv6](https://github.com/PaddlePaddle/PaddleOCR) 模型（Apache License 2.0）
+- [ONNX Runtime](https://onnxruntime.ai/)（MIT 许可证）
+
+详见 [NOTICE](NOTICE)。

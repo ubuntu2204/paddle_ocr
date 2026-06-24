@@ -1,0 +1,42 @@
+paddle_ocr
+==========
+
+This product is licensed under the MIT License (see LICENSE).
+
+This product includes or makes use of the following third-party software:
+
+----------------------------------------------------------------------
+OpenCV (Apache License 2.0)
+----------------------------------------------------------------------
+
+  Homepage: https://opencv.org/
+  License:  https://www.apache.org/licenses/LICENSE-2.0
+
+  Copyright (c) OpenCV contributors
+
+  This product uses OpenCV for image preprocessing and perspective
+  transformation.
+
+----------------------------------------------------------------------
+PaddleOCR PP-OCRv6 (Apache License 2.0)
+----------------------------------------------------------------------
+
+  Homepage: https://github.com/PaddlePaddle/PaddleOCR
+  License:  https://www.apache.org/licenses/LICENSE-2.0
+
+  Copyright (c) PaddlePaddle Authors. All Rights Reserved.
+
+  The OCR models (det.onnx, inference.onnx) and character dictionary
+  (ppocr_v6_dict.txt) included in this project are derived from
+  PaddleOCR's PP-OCRv6 models, converted to ONNX format.
+
+----------------------------------------------------------------------
+ONNX Runtime (MIT License)
+----------------------------------------------------------------------
+
+  Homepage: https://onnxruntime.ai/
+  License:  https://github.com/microsoft/onnxruntime/blob/main/LICENSE
+
+  Copyright (c) Microsoft Corporation
+
+  This product uses ONNX Runtime to execute the OCR models.

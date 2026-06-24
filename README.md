@@ -93,4 +93,11 @@ The plugin consists of:
 
 ## License
 
-See [LICENSE](LICENSE).
+This project is licensed under the [MIT License](LICENSE).
+
+This project uses the following third-party components:
+- [OpenCV](https://opencv.org/) (Apache License 2.0)
+- [PaddleOCR PP-OCRv6](https://github.com/PaddlePaddle/PaddleOCR) models (Apache License 2.0)
+- [ONNX Runtime](https://onnxruntime.ai/) (MIT License)
+
+See [NOTICE](NOTICE) for details.
