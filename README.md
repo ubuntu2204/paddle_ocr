@@ -36,7 +36,7 @@ Add this to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  pp_ocr: ^0.1.1
+  pp_ocr: ^0.1.2
 ```
 
 ## Model Files

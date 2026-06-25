@@ -97,7 +97,7 @@ list(APPEND PLUGIN_SOURCES
 
 # Define the plugin library target. Its name must not be changed.
 add_library(${PLUGIN_NAME} SHARED
-  "include/paddle_ocr/paddle_ocr_plugin_c_api.h"
+  "include/pp_ocr/paddle_ocr_plugin_c_api.h"
   "paddle_ocr_plugin_c_api.cpp"
   ${PLUGIN_SOURCES}
 )
