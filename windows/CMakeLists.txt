@@ -19,43 +19,71 @@ set(PLUGIN_NAME "paddle_ocr_plugin")
 # ==============================================================================
 # Dependency: ONNX Runtime
 # ==============================================================================
-# Option 1: Local pre-built at ../onnxruntime-prebuilt/onnxruntime-win-x64-<ver> (auto-detected)
-# Option 2: Set ONNXRUNTIME_ROOT to your local ONNX Runtime installation
-# Option 3: Auto-download (cached outside build dir)
+# Option 1: Set ONNXRUNTIME_ROOT to your local ONNX Runtime installation
+#           e.g. -DONNXRUNTIME_ROOT="C:/onnxruntime-win-x64-1.20.1"
+# Option 2: Auto-download (cached in build dir)
 # ==============================================================================
 set(ONNXRUNTIME_VERSION "1.20.1" CACHE STRING "ONNX Runtime version")
 
-# Resolve symlink for Flutter plugin builds
-get_filename_component(_PLUGIN_REAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
-set(_LOCAL_ONNX_DIR "${_PLUGIN_REAL_DIR}/../onnxruntime-prebuilt/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}")
-set(_ONNX_CACHE_DIR  "${_PLUGIN_REAL_DIR}/../onnxruntime-cache")
+# Use the build directory for cache (works for pub.dev packages where
+# plugin source is read-only)
+set(_ONNX_CACHE_DIR "${CMAKE_BINARY_DIR}/onnxruntime-cache")
 
-if(EXISTS "${_LOCAL_ONNX_DIR}/include/onnxruntime_cxx_api.h")
-  message(STATUS "[paddle_ocr] Using local pre-built ONNX Runtime: ${_LOCAL_ONNX_DIR}")
-  set(ONNXRUNTIME_ROOT "${_LOCAL_ONNX_DIR}")
-elseif(DEFINED ONNXRUNTIME_ROOT AND EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")
-  message(STATUS "[paddle_ocr] Using local ONNX Runtime: ${ONNXRUNTIME_ROOT}")
+if(DEFINED ONNXRUNTIME_ROOT AND EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")
+  message(STATUS "[paddle_ocr] Using user-provided ONNX Runtime: ${ONNXRUNTIME_ROOT}")
 else()
   set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip")
-  # Store zip and extraction outside build dir so it survives clean builds
   set(ONNXRUNTIME_ZIP "${_ONNX_CACHE_DIR}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip")
   set(ONNXRUNTIME_EXTRACT_DIR "${_ONNX_CACHE_DIR}/onnxruntime-extracted")
   set(ONNXRUNTIME_ROOT "${ONNXRUNTIME_EXTRACT_DIR}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}")
 
   if(NOT EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")
-    if(EXISTS "${ONNXRUNTIME_ZIP}")
-      message(STATUS "[paddle_ocr] Using cached ONNX Runtime zip: ${ONNXRUNTIME_ZIP}")
-    else()
+    # Download with retry logic
+    if(NOT EXISTS "${ONNXRUNTIME_ZIP}")
       message(STATUS "[paddle_ocr] Downloading ONNX Runtime v${ONNXRUNTIME_VERSION}...")
-      file(DOWNLOAD "${ONNXRUNTIME_URL}" "${ONNXRUNTIME_ZIP}"
-           SHOW_PROGRESS STATUS DOWNLOAD_STATUS)
-      list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
-      if(NOT STATUS_CODE EQUAL 0)
-        message(FATAL_ERROR "[paddle_ocr] Failed to download ONNX Runtime. "
-          "Please download manually and set ONNXRUNTIME_ROOT.\n"
-          "URL: ${ONNXRUNTIME_URL}")
+      message(STATUS "[paddle_ocr]   URL: ${ONNXRUNTIME_URL}")
+      set(_DOWNLOAD_OK FALSE)
+      foreach(_ATTEMPT RANGE 1 3)
+        if(_DOWNLOAD_OK)
+          break()
+        endif()
+        message(STATUS "[paddle_ocr]   Attempt ${_ATTEMPT}/3...")
+        file(DOWNLOAD "${ONNXRUNTIME_URL}" "${ONNXRUNTIME_ZIP}"
+             SHOW_PROGRESS
+             TIMEOUT 300
+             STATUS DOWNLOAD_STATUS
+             TLS_VERIFY ON)
+        list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
+        if(STATUS_CODE EQUAL 0)
+          set(_DOWNLOAD_OK TRUE)
+          message(STATUS "[paddle_ocr]   Download complete.")
+        else()
+          list(GET DOWNLOAD_STATUS 1 STATUS_MSG)
+          message(WARNING "[paddle_ocr]   Download failed: ${STATUS_MSG}")
+          file(REMOVE "${ONNXRUNTIME_ZIP}")
+        endif()
+      endforeach()
+
+      if(NOT _DOWNLOAD_OK)
+        message(FATAL_ERROR
+          "[paddle_ocr] Failed to download ONNX Runtime after 3 attempts.\n"
+          "This is likely a network issue (common in China).\n"
+          "\n"
+          "Solutions:\n"
+          "  1. Manually download from:\n"
+          "     ${ONNXRUNTIME_URL}\n"
+          "  2. Extract and set CMake option:\n"
+          "     -DONNXRUNTIME_ROOT=\"<path-to-extracted-onnxruntime>\"\n"
+          "  3. Or set environment variable before build:\n"
+          "     set ONNXRUNTIME_ROOT=<path-to-extracted-onnxruntime>\n"
+          "\n"
+          "The extracted directory must contain 'include/' and 'lib/' subdirs.")
       endif()
+    else()
+      message(STATUS "[paddle_ocr] Using cached ONNX Runtime zip.")
     endif()
+
+    # Verify zip is valid before extracting
     message(STATUS "[paddle_ocr] Extracting ONNX Runtime...")
     file(ARCHIVE_EXTRACT INPUT "${ONNXRUNTIME_ZIP}"
          DESTINATION "${ONNXRUNTIME_EXTRACT_DIR}")
@@ -68,7 +96,13 @@ set(ONNXRUNTIME_INCLUDE_DIR "${ONNXRUNTIME_ROOT}/include")
 set(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_ROOT}/lib")
 
 if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h")
-  message(FATAL_ERROR "[paddle_ocr] ONNX Runtime headers not found at: ${ONNXRUNTIME_INCLUDE_DIR}")
+  message(FATAL_ERROR
+    "[paddle_ocr] ONNX Runtime headers not found at: ${ONNXRUNTIME_INCLUDE_DIR}\n"
+    "\n"
+    "The download or extraction may have failed.\n"
+    "Try one of:\n"
+    "  1. Delete ${_ONNX_CACHE_DIR} and rebuild\n"
+    "  2. Manually download and set -DONNXRUNTIME_ROOT=<path>")
 endif()
 message(STATUS "[paddle_ocr] ONNX Runtime include: ${ONNXRUNTIME_INCLUDE_DIR}")
 message(STATUS "[paddle_ocr] ONNX Runtime lib: ${ONNXRUNTIME_LIB_DIR}")
@@ -76,28 +110,18 @@ message(STATUS "[paddle_ocr] ONNX Runtime lib: ${ONNXRUNTIME_LIB_DIR}")
 # ==============================================================================
 # Dependency: OpenCV
 # ==============================================================================
-# Option 1: Local pre-built at ../opencv-prebuilt/opencv/build (auto-detected)
-# Option 2: Set OpenCV_DIR to your OpenCV build directory
+# Option 1: Set OpenCV_DIR to your OpenCV build directory
 #   e.g. -DOpenCV_DIR="C:/opencv/build"
+# Option 2: Set OpenCV_DIR environment variable
 # Option 3: Build from source via FetchContent (slow first build, ~10-20 min)
 # ==============================================================================
 
-set(_LOCAL_OPENCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../opencv-prebuilt/opencv/build")
-# Resolve symlink (Flutter plugin builds use symlinks)
-get_filename_component(_LOCAL_OPENCV_DIR "${_LOCAL_OPENCV_DIR}" REALPATH)
-
-if(EXISTS "${_LOCAL_OPENCV_DIR}/OpenCVConfig.cmake")
-  message(STATUS "[paddle_ocr] Using local pre-built OpenCV: ${_LOCAL_OPENCV_DIR}")
-  set(OpenCV_DIR "${_LOCAL_OPENCV_DIR}" CACHE PATH "" FORCE)
-  # Force vc16 runtime (MSVC 1944+ detected as vc17, but pre-built only has vc16)
-  set(OpenCV_RUNTIME "vc16" CACHE STRING "" FORCE)
-  set(OpenCV_ARCH "x64" CACHE STRING "" FORCE)
-  find_package(OpenCV REQUIRED)
-elseif(DEFINED OpenCV_DIR)
+if(DEFINED OpenCV_DIR AND EXISTS "${OpenCV_DIR}/OpenCVConfig.cmake")
   message(STATUS "[paddle_ocr] Using OpenCV_DIR: ${OpenCV_DIR}")
   find_package(OpenCV REQUIRED)
-elseif(DEFINED ENV{OpenCV_DIR})
+elseif(DEFINED ENV{OpenCV_DIR} AND EXISTS "$ENV{OpenCV_DIR}/OpenCVConfig.cmake")
   message(STATUS "[paddle_ocr] Using OpenCV_DIR from env: $ENV{OpenCV_DIR}")
+  set(OpenCV_DIR "$ENV{OpenCV_DIR}" CACHE PATH "" FORCE)
   find_package(OpenCV REQUIRED)
 else()
   message(STATUS "[paddle_ocr] OpenCV_DIR not set, building OpenCV from source (first build will be slow)...")
