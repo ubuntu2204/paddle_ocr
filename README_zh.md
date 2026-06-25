@@ -36,7 +36,7 @@
 
 ```yaml
 dependencies:
-  pp_ocr: ^0.1.0
+  pp_ocr: ^0.1.1
 ```
 
 ## 模型文件

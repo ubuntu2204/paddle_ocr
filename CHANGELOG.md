@@ -6,3 +6,6 @@
 * Unicode file path support on Windows (Chinese, Japanese, etc.).
 * Detection box overlay with recognized text and confidence scores.
 * Debug logging with UTF-8 validation utilities.
+## 0.1.1
+
+* 修复了一些依赖问题
