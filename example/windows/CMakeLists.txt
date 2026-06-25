@@ -1,10 +1,10 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
-project(paddle_ocr_example LANGUAGES CXX)
+project(pp_ocr_example LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "paddle_ocr_example")
+set(BINARY_NAME "pp_ocr_example")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -54,7 +54,7 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 add_subdirectory("runner")
 
 # Enable the test target.
-set(include_paddle_ocr_tests FALSE)
+set(include_pp_ocr_tests FALSE)
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
