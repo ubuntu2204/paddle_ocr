@@ -1,4 +1,4 @@
-#include "include/paddle_ocr/paddle_ocr_plugin_c_api.h"
+#include "include/pp_ocr/paddle_ocr_plugin_c_api.h"
 
 #include <flutter/plugin_registrar_windows.h>
 
