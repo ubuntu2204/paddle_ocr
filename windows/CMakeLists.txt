@@ -19,90 +19,32 @@ set(PLUGIN_NAME "paddle_ocr_plugin")
 # ==============================================================================
 # Dependency: ONNX Runtime
 # ==============================================================================
-# Option 1: Set ONNXRUNTIME_ROOT to your local ONNX Runtime installation
-#           e.g. -DONNXRUNTIME_ROOT="C:/onnxruntime-win-x64-1.20.1"
-# Option 2: Auto-download (cached in build dir)
+# ONNX Runtime is bundled with this plugin (windows/third_party/onnxruntime/).
+# No download or manual setup required.
+# To use a different version, set ONNXRUNTIME_ROOT CMake option.
 # ==============================================================================
 set(ONNXRUNTIME_VERSION "1.20.1" CACHE STRING "ONNX Runtime version")
 
-# Use the build directory for cache (works for pub.dev packages where
-# plugin source is read-only)
-set(_ONNX_CACHE_DIR "${CMAKE_BINARY_DIR}/onnxruntime-cache")
+# Bundled ONNX Runtime location (ships with the plugin)
+set(_BUNDLED_ONNX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime")
 
 if(DEFINED ONNXRUNTIME_ROOT AND EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")
   message(STATUS "[paddle_ocr] Using user-provided ONNX Runtime: ${ONNXRUNTIME_ROOT}")
+  set(ONNXRUNTIME_INCLUDE_DIR "${ONNXRUNTIME_ROOT}/include")
+  set(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_ROOT}/lib")
+elseif(EXISTS "${_BUNDLED_ONNX_DIR}/include/onnxruntime_cxx_api.h")
+  message(STATUS "[paddle_ocr] Using bundled ONNX Runtime v${ONNXRUNTIME_VERSION}")
+  set(ONNXRUNTIME_INCLUDE_DIR "${_BUNDLED_ONNX_DIR}/include")
+  set(ONNXRUNTIME_LIB_DIR "${_BUNDLED_ONNX_DIR}/lib")
 else()
-  set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip")
-  set(ONNXRUNTIME_ZIP "${_ONNX_CACHE_DIR}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip")
-  set(ONNXRUNTIME_EXTRACT_DIR "${_ONNX_CACHE_DIR}/onnxruntime-extracted")
-  set(ONNXRUNTIME_ROOT "${ONNXRUNTIME_EXTRACT_DIR}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}")
-
-  if(NOT EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")
-    # Download with retry logic
-    if(NOT EXISTS "${ONNXRUNTIME_ZIP}")
-      message(STATUS "[paddle_ocr] Downloading ONNX Runtime v${ONNXRUNTIME_VERSION}...")
-      message(STATUS "[paddle_ocr]   URL: ${ONNXRUNTIME_URL}")
-      set(_DOWNLOAD_OK FALSE)
-      foreach(_ATTEMPT RANGE 1 3)
-        if(_DOWNLOAD_OK)
-          break()
-        endif()
-        message(STATUS "[paddle_ocr]   Attempt ${_ATTEMPT}/3...")
-        file(DOWNLOAD "${ONNXRUNTIME_URL}" "${ONNXRUNTIME_ZIP}"
-             SHOW_PROGRESS
-             TIMEOUT 300
-             STATUS DOWNLOAD_STATUS
-             TLS_VERIFY ON)
-        list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
-        if(STATUS_CODE EQUAL 0)
-          set(_DOWNLOAD_OK TRUE)
-          message(STATUS "[paddle_ocr]   Download complete.")
-        else()
-          list(GET DOWNLOAD_STATUS 1 STATUS_MSG)
-          message(WARNING "[paddle_ocr]   Download failed: ${STATUS_MSG}")
-          file(REMOVE "${ONNXRUNTIME_ZIP}")
-        endif()
-      endforeach()
-
-      if(NOT _DOWNLOAD_OK)
-        message(FATAL_ERROR
-          "[paddle_ocr] Failed to download ONNX Runtime after 3 attempts.\n"
-          "This is likely a network issue (common in China).\n"
-          "\n"
-          "Solutions:\n"
-          "  1. Manually download from:\n"
-          "     ${ONNXRUNTIME_URL}\n"
-          "  2. Extract and set CMake option:\n"
-          "     -DONNXRUNTIME_ROOT=\"<path-to-extracted-onnxruntime>\"\n"
-          "  3. Or set environment variable before build:\n"
-          "     set ONNXRUNTIME_ROOT=<path-to-extracted-onnxruntime>\n"
-          "\n"
-          "The extracted directory must contain 'include/' and 'lib/' subdirs.")
-      endif()
-    else()
-      message(STATUS "[paddle_ocr] Using cached ONNX Runtime zip.")
-    endif()
-
-    # Verify zip is valid before extracting
-    message(STATUS "[paddle_ocr] Extracting ONNX Runtime...")
-    file(ARCHIVE_EXTRACT INPUT "${ONNXRUNTIME_ZIP}"
-         DESTINATION "${ONNXRUNTIME_EXTRACT_DIR}")
-  else()
-    message(STATUS "[paddle_ocr] ONNX Runtime already extracted at: ${ONNXRUNTIME_ROOT}")
-  endif()
+  message(FATAL_ERROR
+    "[paddle_ocr] ONNX Runtime not found.\n"
+    "Bundled location missing: ${_BUNDLED_ONNX_DIR}\n"
+    "Set -DONNXRUNTIME_ROOT=<path> to use a custom installation.")
 endif()
 
-set(ONNXRUNTIME_INCLUDE_DIR "${ONNXRUNTIME_ROOT}/include")
-set(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_ROOT}/lib")
-
 if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h")
-  message(FATAL_ERROR
-    "[paddle_ocr] ONNX Runtime headers not found at: ${ONNXRUNTIME_INCLUDE_DIR}\n"
-    "\n"
-    "The download or extraction may have failed.\n"
-    "Try one of:\n"
-    "  1. Delete ${_ONNX_CACHE_DIR} and rebuild\n"
-    "  2. Manually download and set -DONNXRUNTIME_ROOT=<path>")
+  message(FATAL_ERROR "[paddle_ocr] ONNX Runtime headers not found at: ${ONNXRUNTIME_INCLUDE_DIR}")
 endif()
 message(STATUS "[paddle_ocr] ONNX Runtime include: ${ONNXRUNTIME_INCLUDE_DIR}")
 message(STATUS "[paddle_ocr] ONNX Runtime lib: ${ONNXRUNTIME_LIB_DIR}")
