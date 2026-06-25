@@ -67,7 +67,11 @@ elseif(DEFINED ENV{OpenCV_DIR} AND EXISTS "$ENV{OpenCV_DIR}/OpenCVConfig.cmake")
 elseif(EXISTS "${_BUNDLED_OPENCV_DIR}/include/opencv2/opencv.hpp")
   message(STATUS "[pp_ocr] Using bundled OpenCV 4.9.0")
   set(OpenCV_INCLUDE_DIRS "${_BUNDLED_OPENCV_DIR}/include")
-  set(OpenCV_LIBS "${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.lib")
+  # Use generator expression to select debug/release lib
+  set(OpenCV_LIBS
+    "$<$<CONFIG:Debug>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490d.lib>"
+    "$<$<NOT:$<CONFIG:Debug>>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.lib>"
+  )
   set(_OPENCV_DLL "${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.dll")
 else()
   message(FATAL_ERROR
