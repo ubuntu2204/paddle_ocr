@@ -17,7 +17,7 @@ cmake_policy(VERSION 3.14...3.25)
 set(PLUGIN_NAME "pp_ocr_plugin")
 
 # ==============================================================================
-# Dependency: ONNX Runtime
+# Dependency: ONNX Runtime (bundled)
 # ==============================================================================
 # ONNX Runtime is bundled with this plugin (windows/third_party/onnxruntime/).
 # No download or manual setup required.
@@ -25,163 +25,59 @@ set(PLUGIN_NAME "pp_ocr_plugin")
 # ==============================================================================
 set(ONNXRUNTIME_VERSION "1.20.1" CACHE STRING "ONNX Runtime version")
 
-# Bundled ONNX Runtime location (ships with the plugin)
 set(_BUNDLED_ONNX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime")
 
 if(DEFINED ONNXRUNTIME_ROOT AND EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")
-  message(STATUS "[paddle_ocr] Using user-provided ONNX Runtime: ${ONNXRUNTIME_ROOT}")
+  message(STATUS "[pp_ocr] Using user-provided ONNX Runtime: ${ONNXRUNTIME_ROOT}")
   set(ONNXRUNTIME_INCLUDE_DIR "${ONNXRUNTIME_ROOT}/include")
   set(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_ROOT}/lib")
 elseif(EXISTS "${_BUNDLED_ONNX_DIR}/include/onnxruntime_cxx_api.h")
-  message(STATUS "[paddle_ocr] Using bundled ONNX Runtime v${ONNXRUNTIME_VERSION}")
+  message(STATUS "[pp_ocr] Using bundled ONNX Runtime v${ONNXRUNTIME_VERSION}")
   set(ONNXRUNTIME_INCLUDE_DIR "${_BUNDLED_ONNX_DIR}/include")
   set(ONNXRUNTIME_LIB_DIR "${_BUNDLED_ONNX_DIR}/lib")
 else()
   message(FATAL_ERROR
-    "[paddle_ocr] ONNX Runtime not found.\n"
+    "[pp_ocr] ONNX Runtime not found.\n"
     "Bundled location missing: ${_BUNDLED_ONNX_DIR}\n"
     "Set -DONNXRUNTIME_ROOT=<path> to use a custom installation.")
 endif()
 
 if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h")
-  message(FATAL_ERROR "[paddle_ocr] ONNX Runtime headers not found at: ${ONNXRUNTIME_INCLUDE_DIR}")
+  message(FATAL_ERROR "[pp_ocr] ONNX Runtime headers not found at: ${ONNXRUNTIME_INCLUDE_DIR}")
 endif()
-message(STATUS "[paddle_ocr] ONNX Runtime include: ${ONNXRUNTIME_INCLUDE_DIR}")
-message(STATUS "[paddle_ocr] ONNX Runtime lib: ${ONNXRUNTIME_LIB_DIR}")
+message(STATUS "[pp_ocr] ONNX Runtime include: ${ONNXRUNTIME_INCLUDE_DIR}")
+message(STATUS "[pp_ocr] ONNX Runtime lib: ${ONNXRUNTIME_LIB_DIR}")
 
 # ==============================================================================
-# Dependency: OpenCV
+# Dependency: OpenCV (bundled)
 # ==============================================================================
-# Option 1: Set OpenCV_DIR to your OpenCV build directory
-#   e.g. -DOpenCV_DIR="C:/opencv/build"
-# Option 2: Set OpenCV_DIR environment variable
-# Option 3: Build from source via FetchContent (slow first build, ~10-20 min)
+# OpenCV is bundled with this plugin (windows/third_party/opencv/).
+# No download or manual setup required.
+# To use a different version, set OpenCV_DIR CMake option.
 # ==============================================================================
+set(_BUNDLED_OPENCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/opencv")
 
 if(DEFINED OpenCV_DIR AND EXISTS "${OpenCV_DIR}/OpenCVConfig.cmake")
-  message(STATUS "[paddle_ocr] Using OpenCV_DIR: ${OpenCV_DIR}")
+  message(STATUS "[pp_ocr] Using user-provided OpenCV: ${OpenCV_DIR}")
   find_package(OpenCV REQUIRED)
 elseif(DEFINED ENV{OpenCV_DIR} AND EXISTS "$ENV{OpenCV_DIR}/OpenCVConfig.cmake")
-  message(STATUS "[paddle_ocr] Using OpenCV_DIR from env: $ENV{OpenCV_DIR}")
+  message(STATUS "[pp_ocr] Using OpenCV_DIR from env: $ENV{OpenCV_DIR}")
   set(OpenCV_DIR "$ENV{OpenCV_DIR}" CACHE PATH "" FORCE)
   find_package(OpenCV REQUIRED)
+elseif(EXISTS "${_BUNDLED_OPENCV_DIR}/include/opencv2/opencv.hpp")
+  message(STATUS "[pp_ocr] Using bundled OpenCV 4.9.0")
+  set(OpenCV_INCLUDE_DIRS "${_BUNDLED_OPENCV_DIR}/include")
+  set(OpenCV_LIBS "${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.lib")
+  set(_OPENCV_DLL "${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.dll")
 else()
-  message(STATUS "[paddle_ocr] OpenCV_DIR not set, building OpenCV from source (first build will be slow)...")
-  message(STATUS "[paddle_ocr] TIP: Set -DOpenCV_DIR=path/to/opencv/build to skip building from source.")
-  include(FetchContent)
-
-  # Try multiple mirrors for OpenCV source (GitHub often fails in China)
-  set(OPENCV_VERSION_TAG "4.10.0")
-  set(OPENCV_CACHE_ZIP "${CMAKE_BINARY_DIR}/opencv-${OPENCV_VERSION_TAG}.zip")
-  set(OPENCV_SOURCE_DIR "${CMAKE_BINARY_DIR}/opencv-${OPENCV_VERSION_TAG}-src")
-
-  if(NOT EXISTS "${OPENCV_SOURCE_DIR}/CMakeLists.txt")
-    set(_OPENCV_URLS
-      "https://gitee.com/mirrors/opencv/repository/archive/${OPENCV_VERSION_TAG}.zip"
-      "https://github.com/opencv/opencv/archive/refs/tags/${OPENCV_VERSION_TAG}.zip"
-      "https://hub.fastgit.xyz/opencv/opencv/archive/refs/tags/${OPENCV_VERSION_TAG}.zip"
-    )
-
-    set(_OPENCV_DOWNLOADED FALSE)
-    foreach(_URL ${_OPENCV_URLS})
-      if(_OPENCV_DOWNLOADED)
-        break()
-      endif()
-      if(EXISTS "${OPENCV_CACHE_ZIP}")
-        set(_OPENCV_DOWNLOADED TRUE)
-        break()
-      endif()
-      message(STATUS "[paddle_ocr] Trying OpenCV download: ${_URL}")
-      file(DOWNLOAD "${_URL}" "${OPENCV_CACHE_ZIP}"
-           TIMEOUT 600
-           STATUS _DL_STATUS
-           TLS_VERIFY ON)
-      list(GET _DL_STATUS 0 _DL_CODE)
-      if(_DL_CODE EQUAL 0 AND EXISTS "${OPENCV_CACHE_ZIP}")
-        set(_OPENCV_DOWNLOADED TRUE)
-        message(STATUS "[paddle_ocr] OpenCV downloaded successfully.")
-      else()
-        list(GET _DL_STATUS 1 _DL_MSG)
-        message(WARNING "[paddle_ocr] Download failed: ${_DL_MSG}")
-        file(REMOVE "${OPENCV_CACHE_ZIP}")
-      endif()
-    endforeach()
-
-    if(NOT _OPENCV_DOWNLOADED)
-      message(FATAL_ERROR
-        "[paddle_ocr] Failed to download OpenCV from all mirrors.\n"
-        "This is likely a network issue.\n"
-        "\n"
-        "Solutions:\n"
-        "  1. Manually download OpenCV source and build it, then set:\n"
-        "     -DOpenCV_DIR=<path-to-opencv-build>\n"
-        "  2. Or download OpenCV pre-built for Windows from:\n"
-        "     https://github.com/opencv/opencv/releases\n"
-        "     Then set OpenCV_DIR to the build directory.")
-    endif()
-
-    message(STATUS "[paddle_ocr] Extracting OpenCV...")
-    file(ARCHIVE_EXTRACT INPUT "${OPENCV_CACHE_ZIP}"
-         DESTINATION "${CMAKE_BINARY_DIR}/opencv-extract")
-    # Find the extracted directory (name varies by source)
-    file(GLOB _EXTRACTED_DIRS "${CMAKE_BINARY_DIR}/opencv-extract/opencv-*")
-    if(_EXTRACTED_DIRS)
-      list(GET _EXTRACTED_DIRS 0 _EXTRACTED_DIR)
-      file(RENAME "${_EXTRACTED_DIR}" "${OPENCV_SOURCE_DIR}")
-    endif()
-  endif()
-
-  FetchContent_Declare(
-    opencv
-    SOURCE_DIR "${OPENCV_SOURCE_DIR}"
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-  )
-  set(BUILD_opencv_apps OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_python2 OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_python3 OFF CACHE BOOL "" FORCE)
-  set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(BUILD_PERF_TESTS OFF CACHE BOOL "" FORCE)
-  set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(BUILD_DOCS OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_java OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_js OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_dnn OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_ml OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_highgui OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_videoio OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_features2d OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_calib3d OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_flann OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_photo OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_stitching OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_video OFF CACHE BOOL "" FORCE)
-  set(BUILD_opencv_objdetect OFF CACHE BOOL "" FORCE)
-  set(WITH_CUDA OFF CACHE BOOL "" FORCE)
-  set(WITH_FFMPEG OFF CACHE BOOL "" FORCE)
-  set(WITH_GSTREAMER OFF CACHE BOOL "" FORCE)
-  set(WITH_DIRECTX OFF CACHE BOOL "" FORCE)
-  set(WITH_OPENCL OFF CACHE BOOL "" FORCE)
-  set(WITH_ITT OFF CACHE BOOL "" FORCE)
-  set(WITH_IPP OFF CACHE BOOL "" FORCE)
-  set(WITH_LAPACK OFF CACHE BOOL "" FORCE)
-  set(WITH_PROTOBUF OFF CACHE BOOL "" FORCE)
-  set(WITH_EIGEN OFF CACHE BOOL "" FORCE)
-  set(WITH_TBB OFF CACHE BOOL "" FORCE)
-  set(WITH_OPENMP OFF CACHE BOOL "" FORCE)
-  set(WITH_PTHREADS_PF OFF CACHE BOOL "" FORCE)
-  set(OPENCV_SKIP_PYTHON WARNING CACHE BOOL "" FORCE)
-  set(OPENCV_DISABLE_PYTHON_WARNING ON CACHE BOOL "" FORCE)
-  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-  set(OPENCV_ENABLE_NONFREE OFF CACHE BOOL "" FORCE)
-  set(OPENCV_CONFIG_FILE_INCLUDE_DIR "${CMAKE_BINARY_DIR}/opencv_config" CACHE PATH "" FORCE)
-  file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/opencv_config")
-  set(CMAKE_INSTALL_INCLUDEDIR "include")
-  set(CMAKE_INSTALL_LIBDIR "lib")
-  FetchContent_MakeAvailable(opencv)
+  message(FATAL_ERROR
+    "[pp_ocr] OpenCV not found.\n"
+    "Bundled location missing: ${_BUNDLED_OPENCV_DIR}\n"
+    "Set -DOpenCV_DIR=<path> to use a custom installation.")
 endif()
 
-message(STATUS "[paddle_ocr] OpenCV include: ${OpenCV_INCLUDE_DIRS}")
-message(STATUS "[paddle_ocr] OpenCV libs: ${OpenCV_LIBS}")
+message(STATUS "[pp_ocr] OpenCV include: ${OpenCV_INCLUDE_DIRS}")
+message(STATUS "[pp_ocr] OpenCV libs: ${OpenCV_LIBS}")
 
 # ==============================================================================
 # Plugin library
@@ -218,6 +114,7 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${ONNXRUNTIME_INCLUDE_DIR}"
+  "${OpenCV_INCLUDE_DIRS}"
 )
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -234,18 +131,13 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 # ==============================================================================
 # Bundle DLLs with the plugin
 # ==============================================================================
-# Find OpenCV world DLL(s) for runtime bundling
-# ==============================================================================
 set(_OPENCV_DLLS "")
-# OpenCV_LIB_PATH is set by pre-built OpenCV config (e.g. <build>/x64/vc16/lib)
-if(OpenCV_LIB_PATH AND EXISTS "${OpenCV_LIB_PATH}")
+if(DEFINED _OPENCV_DLL AND EXISTS "${_OPENCV_DLL}")
+  set(_OPENCV_DLLS "${_OPENCV_DLL}")
+elseif(OpenCV_LIB_PATH AND EXISTS "${OpenCV_LIB_PATH}")
   set(_OPENCV_BIN_DIR "${OpenCV_LIB_PATH}/../bin")
   get_filename_component(_OPENCV_BIN_DIR "${_OPENCV_BIN_DIR}" ABSOLUTE)
   file(GLOB _OPENCV_DLLS "${_OPENCV_BIN_DIR}/opencv_world*.dll")
-  message(STATUS "[paddle_ocr] OpenCV DLLs found: ${_OPENCV_DLLS}")
-else()
-  message(STATUS "[paddle_ocr] OpenCV_LIB_PATH: ${OpenCV_LIB_PATH}")
-  message(STATUS "[paddle_ocr] OpenCV_INSTALL_PATH: ${OpenCV_INSTALL_PATH}")
 endif()
 
 set(pp_ocr_bundled_libraries
