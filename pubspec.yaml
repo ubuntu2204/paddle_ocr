@@ -1,6 +1,6 @@
 name: pp_ocr
 description: "Flutter plugin for offline OCR using PP-OCRv6 (PaddleOCR) with ONNX Runtime C++ inference. Supports text detection and recognition on Windows."
-version: 0.1.0
+version: 0.1.1
 homepage: https://github.com/ubuntu2204/paddle_ocr
 repository: https://github.com/ubuntu2204/paddle_ocr
 issue_tracker: https://github.com/ubuntu2204/paddle_ocr/issues
