@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.14)
 
 # Project-level configuration.
-set(PROJECT_NAME "paddle_ocr")
+set(PROJECT_NAME "pp_ocr")
 project(${PROJECT_NAME} LANGUAGES CXX)
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
@@ -14,7 +14,7 @@ cmake_policy(VERSION 3.14...3.25)
 
 # This value is used when generating builds using this plugin, so it must
 # not be changed
-set(PLUGIN_NAME "paddle_ocr_plugin")
+set(PLUGIN_NAME "pp_ocr_plugin")
 
 # ==============================================================================
 # Dependency: ONNX Runtime
@@ -186,7 +186,7 @@ else()
   message(STATUS "[paddle_ocr] OpenCV_INSTALL_PATH: ${OpenCV_INSTALL_PATH}")
 endif()
 
-set(paddle_ocr_bundled_libraries
+set(pp_ocr_bundled_libraries
   "${ONNXRUNTIME_LIB_DIR}/onnxruntime.dll"
   ${_OPENCV_DLLS}
   PARENT_SCOPE
