@@ -9,7 +9,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
-import 'package:paddle_ocr/paddle_ocr.dart';
+import 'package:pp_ocr/pp_ocr.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();

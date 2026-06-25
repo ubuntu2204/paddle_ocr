@@ -6,7 +6,7 @@
 /// ## Quick Start
 ///
 /// ```dart
-/// import 'package:paddle_ocr/paddle_ocr.dart';
+/// import 'package:pp_ocr/pp_ocr.dart';
 ///
 /// final ocr = PaddleOcr();
 ///

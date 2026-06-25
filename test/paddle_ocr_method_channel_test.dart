@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:paddle_ocr/paddle_ocr_method_channel.dart';
+import 'package:pp_ocr/paddle_ocr_method_channel.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

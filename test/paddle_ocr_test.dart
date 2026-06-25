@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:paddle_ocr/paddle_ocr.dart';
-import 'package:paddle_ocr/paddle_ocr_method_channel.dart';
+import 'package:pp_ocr/paddle_ocr.dart';
+import 'package:pp_ocr/paddle_ocr_method_channel.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 class MockPaddleOcrPlatform
@@ -16,12 +16,10 @@ class MockPaddleOcrPlatform
     required String detModelPath,
     required String recModelPath,
     required String dictPath,
-  }) =>
-      Future.value(true);
+  }) => Future.value(true);
 
   @override
-  Future<List<OcrResult>> recognizeImage(String imagePath) =>
-      Future.value([]);
+  Future<List<OcrResult>> recognizeImage(String imagePath) => Future.value([]);
 
   @override
   Future<List<OcrResult>> recognizeImageBytes(Uint8List imageBytes) =>

@@ -1,5 +1,5 @@
-name: paddle_ocr_example
-description: "Demonstrates how to use the paddle_ocr plugin."
+name: pp_ocr_example
+description: "Demonstrates how to use the pp_ocr plugin."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -17,9 +17,9 @@ dependencies:
   flutter:
     sdk: flutter
 
-  paddle_ocr:
+  pp_ocr:
     # When depending on this package from a real application you should use:
-    #   paddle_ocr: ^x.y.z
+    #   pp_ocr: ^x.y.z
     # See https://dart.dev/tools/pub/dependencies#version-constraints
     # The example app is bundled with the plugin so we use a path dependency on
     # the parent directory to use the current plugin's version.

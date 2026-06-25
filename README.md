@@ -1,4 +1,4 @@
-# paddle_ocr
+# pp_ocr
 
 English | [简体中文](README_zh.md)
 

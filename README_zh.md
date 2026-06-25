@@ -1,4 +1,4 @@
-# paddle_ocr
+# pp_ocr
 
 [English](README.md) | 简体中文
 
@@ -36,7 +36,7 @@
 
 ```yaml
 dependencies:
-  paddle_ocr: ^0.1.0
+  pp_ocr: ^0.1.0
 ```
 
 ## 模型文件

@@ -3,7 +3,7 @@ import 'dart:ui' as ui;
 import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
-import 'package:paddle_ocr/paddle_ocr.dart';
+import 'package:pp_ocr/pp_ocr.dart';
 
 void main() {
   runApp(const OcrExampleApp());
@@ -83,7 +83,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
     } catch (e, st) {
       developer.log('Init error', error: e, stackTrace: st);
       setState(() {
-        _statusMessage = 'Initialization error: $e\n'
+        _statusMessage =
+            'Initialization error: $e\n'
             'Type: ${e.runtimeType}\n'
             'Stack: ${st.toString().split('\n').take(5).join(' | ')}';
       });
@@ -143,7 +144,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
     } on FormatException catch (e) {
       developer.log('FormatException in pickAndRecognize', error: e);
       setState(() {
-        _statusMessage = 'FormatException: ${e.message}\n'
+        _statusMessage =
+            'FormatException: ${e.message}\n'
             'Offset: ${e.offset}\n'
             'Type: ${e.runtimeType}\n'
             'This indicates invalid UTF-8 data from native code.\n'
@@ -153,7 +155,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
     } catch (e, st) {
       developer.log('pickAndRecognize error', error: e, stackTrace: st);
       setState(() {
-        _statusMessage = 'Error: $e\n'
+        _statusMessage =
+            'Error: $e\n'
             'Type: ${e.runtimeType}\n'
             'Stack: ${st.toString().split('\n').take(5).join(' | ')}';
         _loading = false;
@@ -195,10 +198,7 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
               child: SingleChildScrollView(
                 child: SelectableText(
                   _statusMessage!,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontFamily: 'monospace',
-                  ),
+                  style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
                 ),
               ),
             ),
