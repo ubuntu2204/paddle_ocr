@@ -69,9 +69,71 @@ else()
   message(STATUS "[paddle_ocr] OpenCV_DIR not set, building OpenCV from source (first build will be slow)...")
   message(STATUS "[paddle_ocr] TIP: Set -DOpenCV_DIR=path/to/opencv/build to skip building from source.")
   include(FetchContent)
+
+  # Try multiple mirrors for OpenCV source (GitHub often fails in China)
+  set(OPENCV_VERSION_TAG "4.10.0")
+  set(OPENCV_CACHE_ZIP "${CMAKE_BINARY_DIR}/opencv-${OPENCV_VERSION_TAG}.zip")
+  set(OPENCV_SOURCE_DIR "${CMAKE_BINARY_DIR}/opencv-${OPENCV_VERSION_TAG}-src")
+
+  if(NOT EXISTS "${OPENCV_SOURCE_DIR}/CMakeLists.txt")
+    set(_OPENCV_URLS
+      "https://gitee.com/mirrors/opencv/repository/archive/${OPENCV_VERSION_TAG}.zip"
+      "https://github.com/opencv/opencv/archive/refs/tags/${OPENCV_VERSION_TAG}.zip"
+      "https://hub.fastgit.xyz/opencv/opencv/archive/refs/tags/${OPENCV_VERSION_TAG}.zip"
+    )
+
+    set(_OPENCV_DOWNLOADED FALSE)
+    foreach(_URL ${_OPENCV_URLS})
+      if(_OPENCV_DOWNLOADED)
+        break()
+      endif()
+      if(EXISTS "${OPENCV_CACHE_ZIP}")
+        set(_OPENCV_DOWNLOADED TRUE)
+        break()
+      endif()
+      message(STATUS "[paddle_ocr] Trying OpenCV download: ${_URL}")
+      file(DOWNLOAD "${_URL}" "${OPENCV_CACHE_ZIP}"
+           TIMEOUT 600
+           STATUS _DL_STATUS
+           TLS_VERIFY ON)
+      list(GET _DL_STATUS 0 _DL_CODE)
+      if(_DL_CODE EQUAL 0 AND EXISTS "${OPENCV_CACHE_ZIP}")
+        set(_OPENCV_DOWNLOADED TRUE)
+        message(STATUS "[paddle_ocr] OpenCV downloaded successfully.")
+      else()
+        list(GET _DL_STATUS 1 _DL_MSG)
+        message(WARNING "[paddle_ocr] Download failed: ${_DL_MSG}")
+        file(REMOVE "${OPENCV_CACHE_ZIP}")
+      endif()
+    endforeach()
+
+    if(NOT _OPENCV_DOWNLOADED)
+      message(FATAL_ERROR
+        "[paddle_ocr] Failed to download OpenCV from all mirrors.\n"
+        "This is likely a network issue.\n"
+        "\n"
+        "Solutions:\n"
+        "  1. Manually download OpenCV source and build it, then set:\n"
+        "     -DOpenCV_DIR=<path-to-opencv-build>\n"
+        "  2. Or download OpenCV pre-built for Windows from:\n"
+        "     https://github.com/opencv/opencv/releases\n"
+        "     Then set OpenCV_DIR to the build directory.")
+    endif()
+
+    message(STATUS "[paddle_ocr] Extracting OpenCV...")
+    file(ARCHIVE_EXTRACT INPUT "${OPENCV_CACHE_ZIP}"
+         DESTINATION "${CMAKE_BINARY_DIR}/opencv-extract")
+    # Find the extracted directory (name varies by source)
+    file(GLOB _EXTRACTED_DIRS "${CMAKE_BINARY_DIR}/opencv-extract/opencv-*")
+    if(_EXTRACTED_DIRS)
+      list(GET _EXTRACTED_DIRS 0 _EXTRACTED_DIR)
+      file(RENAME "${_EXTRACTED_DIR}" "${OPENCV_SOURCE_DIR}")
+    endif()
+  endif()
+
   FetchContent_Declare(
     opencv
-    URL https://github.com/opencv/opencv/archive/refs/tags/4.10.0.zip
+    SOURCE_DIR "${OPENCV_SOURCE_DIR}"
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   )
   set(BUILD_opencv_apps OFF CACHE BOOL "" FORCE)
