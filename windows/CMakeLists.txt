@@ -72,7 +72,10 @@ elseif(EXISTS "${_BUNDLED_OPENCV_DIR}/include/opencv2/opencv.hpp")
     "$<$<CONFIG:Debug>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490d.lib>"
     "$<$<NOT:$<CONFIG:Debug>>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.lib>"
   )
-  set(_OPENCV_DLL "${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.dll")
+  set(_OPENCV_DLL
+    "$<$<CONFIG:Debug>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490d.dll>"
+    "$<$<NOT:$<CONFIG:Debug>>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.dll>"
+  )
 else()
   message(FATAL_ERROR
     "[pp_ocr] OpenCV not found.\n"
@@ -136,13 +139,13 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 # Bundle DLLs with the plugin
 # ==============================================================================
 set(_OPENCV_DLLS "")
-if(DEFINED _OPENCV_DLL AND EXISTS "${_OPENCV_DLL}")
-  set(_OPENCV_DLLS "${_OPENCV_DLL}")
-elseif(OpenCV_LIB_PATH AND EXISTS "${OpenCV_LIB_PATH}")
-  set(_OPENCV_BIN_DIR "${OpenCV_LIB_PATH}/../bin")
-  get_filename_component(_OPENCV_BIN_DIR "${_OPENCV_BIN_DIR}" ABSOLUTE)
-  file(GLOB _OPENCV_DLLS "${_OPENCV_BIN_DIR}/opencv_world*.dll")
-endif()
+# Include both debug and release DLLs; the correct one is selected at runtime.
+foreach(_dll_name opencv_world490.dll opencv_world490d.dll)
+  set(_dll_path "${_BUNDLED_OPENCV_DIR}/lib/${_dll_name}")
+  if(EXISTS "${_dll_path}")
+    list(APPEND _OPENCV_DLLS "${_dll_path}")
+  endif()
+endforeach()
 
 set(pp_ocr_bundled_libraries
   "${ONNXRUNTIME_LIB_DIR}/onnxruntime.dll"

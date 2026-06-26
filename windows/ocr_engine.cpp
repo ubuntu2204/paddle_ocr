@@ -831,12 +831,11 @@ std::pair<std::string, float> TextRecognizer::DecodeOutput(
       int dict_idx = max_idx - 1;  // dict starts at index 0, model output at 1
       if (dict_idx >= 0 && dict_idx < static_cast<int>(dict_.size())) {
         text += dict_[dict_idx];
-        // Softmax confidence
-        float sum_exp = 0.0f;
-        for (int c = 0; c < num_classes; ++c) {
-          sum_exp += std::exp(row[c]);
-        }
-        float conf = std::exp(row[max_idx]) / sum_exp;
+        // Confidence from log-softmax output: exp(log_prob)
+        // PP-OCR rec models output log-probabilities, not raw logits.
+        float conf = std::exp(row[max_idx]);
+        if (conf > 1.0f) conf = 1.0f;  // clamp for numerical safety
+        if (conf < 0.0f) conf = 0.0f;
         total_conf += conf;
         valid_count++;
       } else {
@@ -844,13 +843,15 @@ std::pair<std::string, float> TextRecognizer::DecodeOutput(
                 dict_idx, dict_.size());
       }
     }
+    // Always update last_idx to correctly handle CTC collapsing:
+    // blank resets dedup, so A-blank-A should produce "AA"
     last_idx = max_idx;
   }
 
   float avg_conf = valid_count > 0 ? total_conf / valid_count : 0.0f;
 
   // Debug: log raw text before sanitization
-  OCR_LOG("DecodeOutput: raw text length=%zu bytes, conf=%.4f, valid_count=%d",
+  OCR_LOG("DecodeOutput: raw text length=%zu bytes, conf=%.6f, valid_count=%d",
           text.size(), avg_conf, valid_count);
   OCR_LOG("DecodeOutput: raw text hex: %s", HexDump(text).c_str());
 
