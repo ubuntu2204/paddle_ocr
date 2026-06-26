@@ -2,16 +2,21 @@ import 'dart:typed_data';
 
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
-import 'paddle_ocr_method_channel.dart';
+import 'pp_ocr_ffi.dart';
 import 'src/ocr_result.dart';
 
-/// Platform interface for the paddle_ocr plugin.
+/// Platform interface for the pp_ocr plugin.
+///
+/// Default implementation uses FFI (dart:ffi) for direct native calls.
+/// If FFI is unavailable (e.g. DLL not found), it automatically falls back
+/// to MethodChannel.
 abstract class PaddleOcrPlatform extends PlatformInterface {
   PaddleOcrPlatform() : super(token: _token);
 
   static final Object _token = Object();
 
-  static PaddleOcrPlatform _instance = MethodChannelPaddleOcr();
+  // Default: try FFI first, which falls back to MethodChannel internally.
+  static PaddleOcrPlatform _instance = FfiPaddleOcr();
 
   static PaddleOcrPlatform get instance => _instance;
 

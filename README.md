@@ -7,9 +7,11 @@ A Flutter plugin for offline OCR (Optical Character Recognition) on Windows, pow
 ## Features
 
 - **Offline OCR** — No internet connection required. All inference runs locally.
+- **Dual Backend** — Uses `dart:ffi` by default for low-latency direct native calls, with automatic fallback to `MethodChannel`.
 - **Text Detection** — DB (Differentiable Binarization) based text detection.
 - **Text Recognition** — CRNN + CTC based text recognition with support for Chinese, English, and 18,000+ characters.
 - **Unicode Path Support** — Correctly handles non-ASCII file paths (Chinese, Japanese, etc.) on Windows.
+- **Bundled Dependencies** — ONNX Runtime and OpenCV are included, no download required.
 - **Bounding Box Overlay** — Returns detection boxes with recognized text and confidence scores.
 
 ## Platform Support
@@ -48,7 +50,7 @@ Add this to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  pp_ocr: ^0.1.3
+  pp_ocr: ^0.2.0
 ```
 
 ## Model Files
@@ -87,19 +89,63 @@ for (final result in results) {
   print('Confidence: ${result.confidence}');
   print('Box: ${result.box}');
 }
+
+// Release native resources when done
+ocr.dispose();
 ```
 
 See the [example app](example/) for a complete demo with image picker and visual box overlay.
 
 ## Architecture
 
-The plugin consists of:
+The plugin supports two backends:
 
-- **Dart layer** (`lib/`) — Platform interface and method channel implementation
-- **C++ layer** (`windows/`) — Native OCR engine using ONNX Runtime and OpenCV
-  - `ocr_engine.cpp` — Text detection (DB) and recognition (CRNN+CTC) pipeline
-  - `paddle_ocr_plugin.cpp` — Flutter method channel handler
-  - `debug_utils.h` — UTF-8 validation and debug logging utilities
+### FFI (Default)
+- C++ engine compiled as DLL with C API (`pp_ocr_ffi.h`)
+- Dart calls native functions directly via `dart:ffi`
+- Lower latency, no serialization overhead
+- Automatic fallback to MethodChannel if DLL not found
+
+### MethodChannel (Fallback)
+- Traditional Flutter plugin architecture via `MethodChannel('paddle_ocr')`
+- Used when FFI DLL is unavailable
+
+```
+┌──────────────────────────────────────────────┐
+│                Dart (pp_ocr.dart)            │
+│                        │                     │
+│         ┌──────────────┴──────────────┐      │
+│         │  PaddleOcrPlatform          │      │
+│         │  (interface)                │      │
+│         └──────┬──────────────┬───────┘      │
+│                │              │              │
+│     ┌──────────▼──┐  ┌───────▼────────┐     │
+│     │ FfiPaddleOcr│  │MethodChannel   │     │
+│     │ (default)   │  │PaddleOcr       │     │
+│     │ dart:ffi    │  │ (fallback)     │     │
+│     └──────┬──────┘  └───────┬────────┘     │
+│            │                 │              │
+└────────────┼─────────────────┼──────────────┘
+             │                 │
+     ┌───────▼───────┐  ┌──────▼──────────┐
+     │ pp_ocr_ffi.h  │  │ paddle_ocr_     │
+     │ pp_ocr_ffi.cpp│  │ plugin.cpp      │
+     │ (C API)       │  │ (MethodChannel) │
+     └───────┬───────┘  └──────┬──────────┘
+             │                 │
+             └────────┬────────┘
+                      │
+              ┌───────▼───────┐
+              │  ocr_engine   │
+              │  .cpp/.h      │
+              │  (OCR core)   │
+              └───────┬───────┘
+                      │
+           ┌──────────┴──────────┐
+           │ONNX Runtime+ OpenCV │
+           │(bundled)            │
+           └─────────────────────┘
+```
 
 ## License
 

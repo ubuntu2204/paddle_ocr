@@ -7,9 +7,11 @@
 ## 功能特性
 
 - **离线 OCR** — 无需网络连接，所有推理在本地运行
+- **双后端架构** — 默认使用 `dart:ffi` 直接调用原生代码（低延迟），自动回退到 `MethodChannel`
 - **文本检测** — 基于 DB（可微分二值化）的文本检测
 - **文本识别** — 基于 CRNN + CTC 的文本识别，支持中文、英文及 18,000+ 字符
 - **Unicode 路径支持** — 正确处理 Windows 上的非 ASCII 文件路径（中文、日文等）
+- **内置依赖** — ONNX Runtime 和 OpenCV 已打包，无需下载
 - **检测框可视化** — 返回检测框坐标、识别文本和置信度
 
 ## 平台支持
@@ -46,7 +48,7 @@
 
 ```yaml
 dependencies:
-  pp_ocr: ^0.1.3
+  pp_ocr: ^0.2.0
 ```
 
 ## 模型文件
@@ -85,19 +87,63 @@ for (final result in results) {
   print('置信度: ${result.confidence}');
   print('检测框: ${result.box}');
 }
+
+// 使用完毕后释放原生资源
+ocr.dispose();
 ```
 
 完整示例请参考 [example 应用](example/)，包含图片选择器和检测框可视化叠加。
 
 ## 架构说明
 
-本插件由以下部分组成：
+本插件支持两种后端：
 
-- **Dart 层** (`lib/`) — 平台接口和 Method Channel 实现
-- **C++ 层** (`windows/`) — 使用 ONNX Runtime 和 OpenCV 的原生 OCR 引擎
-  - `ocr_engine.cpp` — 文本检测（DB）和识别（CRNN+CTC）流水线
-  - `paddle_ocr_plugin.cpp` — Flutter Method Channel 处理器
-  - `debug_utils.h` — UTF-8 验证和调试日志工具
+### FFI（默认）
+- C++ 引擎编译为 DLL，导出 C API（`pp_ocr_ffi.h`）
+- Dart 通过 `dart:ffi` 直接调用原生函数
+- 延迟更低，无序列化开销
+- 如果 DLL 未找到，自动回退到 MethodChannel
+
+### MethodChannel（回退）
+- 传统 Flutter 插件架构，通过 `MethodChannel('paddle_ocr')` 通信
+- 在 FFI DLL 不可用时使用
+
+```
+┌──────────────────────────────────────────────┐
+│                Dart (pp_ocr.dart)            │
+│                        │                     │
+│         ┌──────────────┴──────────────┐      │
+│         │  PaddleOcrPlatform          │      │
+│         │  (接口)                     │      │
+│         └──────┬──────────────┬───────┘      │
+│                │              │              │
+│     ┌──────────▼──┐  ┌───────▼────────┐     │
+│     │ FfiPaddleOcr│  │MethodChannel   │     │
+│     │ (默认)      │  │PaddleOcr       │     │
+│     │ dart:ffi    │  │ (回退)         │     │
+│     └──────┬──────┘  └──────┬─────────┘     │
+│            │                │               │
+└────────────┼────────────────┼───────────────┘
+             │                │
+     ┌───────▼───────┐ ┌──────▼──────────┐
+     │ pp_ocr_ffi.h  │ │ paddle_ocr_     │
+     │ pp_ocr_ffi.cpp│ │ plugin.cpp      │
+     │ (C API)       │ │ (MethodChannel) │
+     └───────┬───────┘ └──────┬──────────┘
+             │                │
+             └───────┬────────┘
+                     │
+             ┌───────▼───────┐
+             │  ocr_engine   │
+             │  .cpp/.h      │
+             │  (OCR 核心)   │
+             └───────┬───────┘
+                     │
+          ┌──────────┴──────────┐
+          │ONNX Runtime+ OpenCV │
+          │(内置)               │
+          └─────────────────────┘
+```
 
 ## 许可证
 

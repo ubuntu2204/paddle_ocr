@@ -104,6 +104,8 @@ list(APPEND PLUGIN_SOURCES
   "paddle_ocr_plugin.h"
   "ocr_engine.cpp"
   "ocr_engine.h"
+  "pp_ocr_ffi.cpp"
+  "pp_ocr_ffi.h"
 )
 
 # Define the plugin library target. Its name must not be changed.

@@ -18,9 +18,15 @@
 ## 0.1.3
 
 * 内置 ONNX Runtime 1.20.1 和 OpenCV 4.9.0，无需下载或手动配置
-* 内置文件位于 `windows/third_party/`：
-  * ONNX Runtime: `onnxruntime.dll`、`onnxruntime.lib`、头文件
-  * OpenCV: `opencv_world490.dll`、`opencv_world490.lib`、`opencv_world490d.lib`、头文件
-* Debug 构建使用 release DLL (`opencv_world490.dll`) 运行，无需 debug DLL
-* 如果遇到"找不到 `opencv_world490d.dll`"错误，请确保 CMake `bundled_libraries`
-  正确配置，`opencv_world490.dll` 会自动复制到输出目录
+* 内置文件位于 `windows/third_party/`
+* Debug 构建使用 release DLL 运行，无需 debug DLL
+
+## 0.2.0
+
+* **重大更新：新增 FFI 后端**
+* 默认使用 `dart:ffi` 直接调用原生 C++ 代码，延迟更低
+* 自动回退到 MethodChannel（FFI DLL 不可用时）
+* 新增 C API（`pp_ocr_ffi.h`）导出纯 C 函数供 FFI 调用
+* 新增 `dispose()` 方法释放原生资源
+* `pubspec.yaml` 添加 `ffiPlugin` 配置
+* 更新 README 文档说明双后端架构
