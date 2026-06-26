@@ -76,6 +76,14 @@ elseif(EXISTS "${_BUNDLED_OPENCV_DIR}/include/opencv2/opencv.hpp")
     "$<$<CONFIG:Debug>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490d.dll>"
     "$<$<NOT:$<CONFIG:Debug>>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.dll>"
   )
+
+  # Auto-copy debug DLL from opencv-prebuilt if missing (too large for GitHub)
+  set(_PREBUILT_DBG_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../opencv-prebuilt/opencv/build/x64/vc16/bin/opencv_world490d.dll")
+  set(_BUNDLED_DBG_DLL "${_BUNDLED_OPENCV_DIR}/lib/opencv_world490d.dll")
+  if(NOT EXISTS "${_BUNDLED_DBG_DLL}" AND EXISTS "${_PREBUILT_DBG_DLL}")
+    message(STATUS "[pp_ocr] Copying debug OpenCV DLL from opencv-prebuilt...")
+    file(COPY "${_PREBUILT_DBG_DLL}" DESTINATION "${_BUNDLED_OPENCV_DIR}/lib")
+  endif()
 else()
   message(FATAL_ERROR
     "[pp_ocr] OpenCV not found.\n"

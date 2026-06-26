@@ -15,3 +15,8 @@ x86/
 *.[Cc]ache
 # but keep track of directories ending in .cache
 !*.[Cc]ache/
+
+# OpenCV debug DLL is too large for GitHub (>100MB).
+# CMake auto-copies it from opencv-prebuilt/ during build.
+third_party/opencv/lib/opencv_world490d.dll
+third_party/opencv/lib/opencv_world490d.lib
