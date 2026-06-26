@@ -27,8 +27,20 @@ A Flutter plugin for offline OCR (Optical Character Recognition) on Windows, pow
 - Flutter >= 3.0.0
 - Windows 10 or later
 - Visual Studio 2022 with CMake support
-- ONNX Runtime 1.20.1 (auto-downloaded during build)
-- OpenCV 4.9.0 (auto-downloaded or pre-built)
+
+> **Note:** ONNX Runtime 1.20.1 and OpenCV 4.9.0 are **bundled** with this plugin
+> (`windows/third_party/`). No download or manual setup is required.
+>
+> The bundled files include:
+> - `onnxruntime.dll` / `onnxruntime.lib` / headers — ONNX Runtime inference engine
+> - `opencv_world490.dll` / `opencv_world490.lib` / `opencv_world490d.lib` / headers — OpenCV image processing
+>
+> If you encounter a "missing `opencv_world490d.dll`" error at runtime, it means
+> your app is running in Debug mode and the debug DLL was not found. Since the debug
+> DLL (124 MB) exceeds GitHub's file size limit, only the release `opencv_world490.dll`
+> is bundled. **Debug builds use the release DLL at runtime** — this is safe and works
+> correctly. Simply ensure `opencv_world490.dll` is copied to your app's output directory
+> (this happens automatically via CMake `bundled_libraries`).
 
 ## Installation
 
@@ -56,7 +68,7 @@ and converted to ONNX format using Paddle2ONNX.
 ## Usage
 
 ```dart
-import 'package:paddle_ocr/paddle_ocr.dart';
+import 'package:pp_ocr/pp_ocr.dart';
 
 final ocr = PaddleOcr();
 

@@ -27,8 +27,18 @@
 - Flutter >= 3.0.0
 - Windows 10 及以上
 - Visual Studio 2022（含 CMake 支持）
-- ONNX Runtime 1.20.1（构建时自动下载）
-- OpenCV 4.9.0（自动下载或预编译）
+
+> **注意：** ONNX Runtime 1.20.1 和 OpenCV 4.9.0 已**内置**在本插件中
+> （`windows/third_party/`），无需下载或手动配置。
+>
+> 内置文件包括：
+> - `onnxruntime.dll` / `onnxruntime.lib` / 头文件 — ONNX Runtime 推理引擎
+> - `opencv_world490.dll` / `opencv_world490.lib` / `opencv_world490d.lib` / 头文件 — OpenCV 图像处理
+>
+> 如果运行时遇到"找不到 `opencv_world490d.dll`"的错误，说明你的应用在 Debug 模式下运行，
+> 但 debug DLL 未找到。由于 debug DLL（124 MB）超过 GitHub 文件大小限制，只内置了 release 版
+> `opencv_world490.dll`。**Debug 构建在运行时使用 release DLL** — 这是安全的，可以正常工作。
+> 只需确保 `opencv_world490.dll` 已复制到应用输出目录（这通过 CMake `bundled_libraries` 自动完成）。
 
 ## 安装
 
@@ -56,7 +66,7 @@ model/
 ## 使用方法
 
 ```dart
-import 'package:paddle_ocr/paddle_ocr.dart';
+import 'package:pp_ocr/pp_ocr.dart';
 
 final ocr = PaddleOcr();
 
