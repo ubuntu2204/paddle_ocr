@@ -7,8 +7,8 @@
 #include <sstream>
 #include <iomanip>
 
-// Compile-time toggle for verbose debug logging.
-// Set to 1 to enable detailed debug output to stderr.
+// 编译期详细调试日志开关
+// 设为 1 可启用输出到 stderr 的详细调试日志
 #ifndef PADDLE_OCR_DEBUG
 #define PADDLE_OCR_DEBUG 1
 #endif
@@ -16,7 +16,7 @@
 namespace paddle_ocr {
 
 // ---------------------------------------------------------------------------
-// Debug log macro - writes to stderr (visible in Flutter debug console).
+// 调试日志宏 - 输出到 stderr（在 Flutter 调试控制台中可见）
 // ---------------------------------------------------------------------------
 #if PADDLE_OCR_DEBUG
 #define OCR_LOG(...) do { \
@@ -30,8 +30,8 @@ namespace paddle_ocr {
 #endif
 
 // ---------------------------------------------------------------------------
-// Convert a string's bytes to a hex dump string for debugging.
-// e.g. "AB\xC3\x28" -> "41 42 C3 28"
+// 将字符串的字节转换为十六进制转储字符串，便于调试
+// 例如 "AB\xC3\x28" -> "41 42 C3 28"
 // ---------------------------------------------------------------------------
 inline std::string HexDump(const std::string& s, size_t max_bytes = 128) {
   std::ostringstream oss;
@@ -48,8 +48,8 @@ inline std::string HexDump(const std::string& s, size_t max_bytes = 128) {
 }
 
 // ---------------------------------------------------------------------------
-// Validate a UTF-8 string and return a detailed error report.
-// Returns empty string if the input is valid UTF-8.
+// 验证 UTF-8 字符串并返回详细的错误报告
+// 输入为有效 UTF-8 时返回空字符串
 // ---------------------------------------------------------------------------
 inline std::string ValidateUtf8Detailed(const std::string& input) {
   size_t i = 0;
@@ -59,6 +59,7 @@ inline std::string ValidateUtf8Detailed(const std::string& input) {
     int seq_len = 0;
     uint32_t codepoint = 0;
 
+    // 根据首字节判断 UTF-8 序列长度并提取首字节携带的码点比特
     if (c <= 0x7F) {
       seq_len = 1;
       codepoint = c;
@@ -80,6 +81,7 @@ inline std::string ValidateUtf8Detailed(const std::string& input) {
       return oss.str();
     }
 
+    // 检查序列是否被截断（剩余字节数不足）
     if (i + seq_len > input.size()) {
       std::ostringstream oss;
       oss << "Invalid UTF-8 at byte offset " << i
@@ -88,6 +90,7 @@ inline std::string ValidateUtf8Detailed(const std::string& input) {
       return oss.str();
     }
 
+    // 验证后续字节是否为合法的 UTF-8 续接字节（0x80-0xBF）
     for (int j = 1; j < seq_len; ++j) {
       unsigned char cb = static_cast<unsigned char>(input[i + j]);
       if ((cb & 0xC0) != 0x80) {
@@ -102,7 +105,7 @@ inline std::string ValidateUtf8Detailed(const std::string& input) {
       codepoint = (codepoint << 6) | (cb & 0x3F);
     }
 
-    // Check for overlong encodings
+    // 检查是否为过长编码（overlong encoding）
     if (seq_len == 2 && codepoint < 0x80) {
       std::ostringstream oss;
       oss << "Invalid UTF-8 at byte offset " << i
@@ -125,7 +128,7 @@ inline std::string ValidateUtf8Detailed(const std::string& input) {
       return oss.str();
     }
 
-    // Check for surrogate halves (U+D800 - U+DFFF)
+    // 检查是否为代理项半字符（U+D800 - U+DFFF，UTF-8 中非法）
     if (codepoint >= 0xD800 && codepoint <= 0xDFFF) {
       std::ostringstream oss;
       oss << "Invalid UTF-8 at byte offset " << i
@@ -135,7 +138,7 @@ inline std::string ValidateUtf8Detailed(const std::string& input) {
       return oss.str();
     }
 
-    // Check for codepoints above U+10FFFF
+    // 检查码点是否超出 Unicode 上限 U+10FFFF
     if (codepoint > 0x10FFFF) {
       std::ostringstream oss;
       oss << "Invalid UTF-8 at byte offset " << i
@@ -148,7 +151,7 @@ inline std::string ValidateUtf8Detailed(const std::string& input) {
     i += seq_len;
     char_count++;
   }
-  return "";  // valid
+  return "";  // 验证通过，返回空字符串
 }
 
 }  // namespace paddle_ocr

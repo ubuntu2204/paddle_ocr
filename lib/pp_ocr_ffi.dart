@@ -9,20 +9,24 @@ import 'paddle_ocr_platform_interface.dart';
 import 'src/ocr_result.dart';
 import 'src/pp_ocr_ffi_bindings.dart';
 
-/// FFI-based implementation of [PaddleOcrPlatform].
+/// [PaddleOcrPlatform] 的 FFI 实现。
 ///
-/// This is the default implementation on Windows. It communicates directly
-/// with the native C++ library via dart:ffi, avoiding the overhead of
-/// MethodChannel. If FFI is unavailable (e.g. DLL not found), it falls
-/// back to [MethodChannelPaddleOcr].
+/// 这是 Windows 平台的默认实现。它通过 dart:ffi 直接与原生 C++ 库通信，
+/// 避免了 MethodChannel 的开销。当 FFI 不可用时（例如找不到 DLL），
+/// 会自动回退到 [MethodChannelPaddleOcr]。
 class FfiPaddleOcr extends PaddleOcrPlatform {
   FfiPaddleOcr();
 
+  /// 原生 OCR 引擎的不透明指针。
   Pointer<Void>? _engine;
+
+  /// FFI 是否可用的标志位。
   bool _ffiAvailable = false;
+
+  /// MethodChannel 回退实现，按需创建。
   MethodChannelPaddleOcr? _fallback;
 
-  /// Try to use FFI; if the DLL cannot be loaded, fall back to MethodChannel.
+  /// 尝试使用 FFI；若 DLL 无法加载，则回退到 MethodChannel。
   PaddleOcrPlatform _getImpl() {
     if (_ffiAvailable && _engine != null && _engine != nullptr) {
       return this;
@@ -31,6 +35,7 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     return _fallback!;
   }
 
+  /// 确保引擎已创建，若创建失败则标记 FFI 不可用。
   void _ensureEngine() {
     if (_engine != null) return;
     try {
@@ -113,16 +118,16 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     return _parseResultsC(resultC);
   }
 
-  /// Always use MethodChannel for features that require the Flutter plugin
-  /// registrar (e.g. native file dialog). FFI cannot show a file picker, so
-  /// we must NOT route through [_getImpl] (which returns [this] when FFI is
-  /// active — that would cause infinite recursion).
+  /// 对于需要 Flutter 插件注册器的功能（例如原生文件对话框），
+  /// 始终使用 MethodChannel。FFI 无法弹出文件选择框，因此不能
+  /// 通过 [_getImpl] 路由（当 FFI 激活时它会返回 [this]，
+  /// 会导致无限递归）。
   MethodChannelPaddleOcr get _methodChannel =>
       _fallback ??= MethodChannelPaddleOcr();
 
   @override
   Future<String?> pickImage() async {
-    // pickImage uses the native Windows file dialog — MethodChannel only.
+    // pickImage 使用 Windows 原生文件对话框 —— 仅限 MethodChannel。
     return _methodChannel.pickImage();
   }
 
@@ -132,13 +137,13 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
       try {
         return PpOcrFfiBindings.instance.version();
       } catch (_) {
-        // fall through to method channel
+        // 回退到 MethodChannel
       }
     }
     return _methodChannel.getPlatformVersion();
   }
 
-  /// Parse C result array into Dart [OcrResult] list.
+  /// 将 C 结果数组解析为 Dart [OcrResult] 列表。
   List<OcrResult> _parseResultsC(PpOcrResultArrayC resultC) {
     final results = <OcrResult>[];
     final count = resultC.count;
@@ -168,7 +173,7 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     return results;
   }
 
-  /// Dispose the engine and free native resources.
+  /// 释放引擎并清理原生资源。
   void dispose() {
     if (_engine != null && _engine != nullptr && _ffiAvailable) {
       try {

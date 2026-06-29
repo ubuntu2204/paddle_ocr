@@ -1,15 +1,15 @@
 import 'dart:ui';
 
-/// Represents a single OCR detection result with bounding box, text, and confidence.
+/// 表示单个 OCR 检测结果，包含边界框、文本内容和置信度。
 class OcrResult {
-  /// The 4 corner points of the detected text region.
-  /// Order: top-left, top-right, bottom-right, bottom-left.
+  /// 检测到的文本区域的 4 个角点。
+  /// 顺序为：左上、右上、右下、左下。
   final List<Offset> box;
 
-  /// The recognized text content.
+  /// 识别出的文本内容。
   final String text;
 
-  /// Recognition confidence score (0.0 ~ 1.0).
+  /// 识别置信度分数（0.0 ~ 1.0）。
   final double confidence;
 
   const OcrResult({
@@ -18,7 +18,7 @@ class OcrResult {
     required this.confidence,
   });
 
-  /// Parse from the map returned by the native method channel.
+  /// 从原生 MethodChannel 返回的 map 解析构造 [OcrResult]。
   factory OcrResult.fromMap(Map<dynamic, dynamic> map) {
     final rawBox = map['box'] as List<dynamic>;
     final box = rawBox.map<Offset>((point) {

@@ -5,42 +5,44 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'pp_ocr_ffi.dart';
 import 'src/ocr_result.dart';
 
-/// Platform interface for the pp_ocr plugin.
+/// pp_ocr 插件的平台接口。
 ///
-/// Default implementation uses FFI (dart:ffi) for direct native calls.
-/// If FFI is unavailable (e.g. DLL not found), it automatically falls back
-/// to MethodChannel.
+/// 默认实现使用 FFI（dart:ffi）直接调用原生库。
+/// 当 FFI 不可用时（例如找不到 DLL），会自动回退到 MethodChannel。
 abstract class PaddleOcrPlatform extends PlatformInterface {
   PaddleOcrPlatform() : super(token: _token);
 
+  /// 平台接口令牌，用于验证子类合法性。
   static final Object _token = Object();
 
-  // Default: try FFI first, which falls back to MethodChannel internally.
+  // 默认：优先尝试 FFI，FFI 内部会回退到 MethodChannel。
   static PaddleOcrPlatform _instance = FfiPaddleOcr();
 
+  /// 获取当前平台接口实例。
   static PaddleOcrPlatform get instance => _instance;
 
+  /// 设置平台接口实例，需通过令牌验证。
   static set instance(PaddleOcrPlatform instance) {
     PlatformInterface.verifyToken(instance, _token);
     _instance = instance;
   }
 
-  /// Initialize the OCR engine with model paths.
+  /// 使用模型路径初始化 OCR 引擎。
   Future<bool> initialize({
     required String detModelPath,
     required String recModelPath,
     required String dictPath,
   });
 
-  /// Recognize text from an image file path.
+  /// 从图片文件路径识别文字。
   Future<List<OcrResult>> recognizeImage(String imagePath);
 
-  /// Recognize text from image bytes.
+  /// 从图片字节数据识别文字。
   Future<List<OcrResult>> recognizeImageBytes(Uint8List imageBytes);
 
-  /// Open a file picker dialog to select an image. Returns the file path.
+  /// 打开文件选择对话框以选择图片，返回所选文件路径。
   Future<String?> pickImage();
 
-  /// Get platform version string.
+  /// 获取平台版本字符串。
   Future<String?> getPlatformVersion();
 }

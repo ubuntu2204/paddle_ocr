@@ -1,32 +1,29 @@
-# The Flutter tooling requires that developers have a version of Visual Studio
-# installed that includes CMake 3.14 or later. You should not increase this
-# version, as doing so will cause the plugin to fail to compile for some
-# customers of the plugin.
+# Flutter 工具链要求开发者安装包含 CMake 3.14 或更高版本的 Visual Studio。
+# 不应提高此版本要求，否则会导致部分插件用户无法编译此插件。
 cmake_minimum_required(VERSION 3.14)
 
-# Project-level configuration.
+# 项目级配置
 set(PROJECT_NAME "pp_ocr")
 project(${PROJECT_NAME} LANGUAGES CXX)
 
-# Explicitly opt in to modern CMake behaviors to avoid warnings with recent
-# versions of CMake.
+# 显式启用现代 CMake 行为，避免在较新版本 CMake 上产生警告
 cmake_policy(VERSION 3.14...3.25)
 
-# This value is used when generating builds using this plugin, so it must
-# not be changed
+# 此值在使用此插件生成构建时使用，不得更改
 set(PLUGIN_NAME "pp_ocr_plugin")
 
 # ==============================================================================
-# Dependency: ONNX Runtime (bundled)
+# 依赖项：ONNX Runtime（内嵌）
 # ==============================================================================
-# ONNX Runtime is bundled with this plugin (windows/third_party/onnxruntime/).
-# No download or manual setup required.
-# To use a different version, set ONNXRUNTIME_ROOT CMake option.
+# ONNX Runtime 随本插件内嵌分发（windows/third_party/onnxruntime/）。
+# 无需下载或手动配置。
+# 如需使用其他版本，设置 ONNXRUNTIME_ROOT CMake 选项即可。
 # ==============================================================================
 set(ONNXRUNTIME_VERSION "1.20.1" CACHE STRING "ONNX Runtime version")
 
 set(_BUNDLED_ONNX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime")
 
+# 优先使用用户提供的 ONNX Runtime 路径，否则使用内嵌版本
 if(DEFINED ONNXRUNTIME_ROOT AND EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")
   message(STATUS "[pp_ocr] Using user-provided ONNX Runtime: ${ONNXRUNTIME_ROOT}")
   set(ONNXRUNTIME_INCLUDE_DIR "${ONNXRUNTIME_ROOT}/include")
@@ -49,14 +46,15 @@ message(STATUS "[pp_ocr] ONNX Runtime include: ${ONNXRUNTIME_INCLUDE_DIR}")
 message(STATUS "[pp_ocr] ONNX Runtime lib: ${ONNXRUNTIME_LIB_DIR}")
 
 # ==============================================================================
-# Dependency: OpenCV (bundled)
+# 依赖项：OpenCV（内嵌）
 # ==============================================================================
-# OpenCV is bundled with this plugin (windows/third_party/opencv/).
-# No download or manual setup required.
-# To use a different version, set OpenCV_DIR CMake option.
+# OpenCV 随本插件内嵌分发（windows/third_party/opencv/）。
+# 无需下载或手动配置。
+# 如需使用其他版本，设置 OpenCV_DIR CMake 选项即可。
 # ==============================================================================
 set(_BUNDLED_OPENCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/opencv")
 
+# 优先使用用户提供的 OpenCV 路径（CMake 变量或环境变量），否则使用内嵌版本
 if(DEFINED OpenCV_DIR AND EXISTS "${OpenCV_DIR}/OpenCVConfig.cmake")
   message(STATUS "[pp_ocr] Using user-provided OpenCV: ${OpenCV_DIR}")
   find_package(OpenCV REQUIRED)
@@ -67,7 +65,7 @@ elseif(DEFINED ENV{OpenCV_DIR} AND EXISTS "$ENV{OpenCV_DIR}/OpenCVConfig.cmake")
 elseif(EXISTS "${_BUNDLED_OPENCV_DIR}/include/opencv2/opencv.hpp")
   message(STATUS "[pp_ocr] Using bundled OpenCV 4.9.0")
   set(OpenCV_INCLUDE_DIRS "${_BUNDLED_OPENCV_DIR}/include")
-  # Use generator expression to select debug/release lib
+  # 使用生成器表达式按 Debug/Release 配置选择对应库
   set(OpenCV_LIBS
     "$<$<CONFIG:Debug>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490d.lib>"
     "$<$<NOT:$<CONFIG:Debug>>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.lib>"
@@ -77,7 +75,7 @@ elseif(EXISTS "${_BUNDLED_OPENCV_DIR}/include/opencv2/opencv.hpp")
     "$<$<NOT:$<CONFIG:Debug>>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.dll>"
   )
 
-  # Auto-copy debug DLL from opencv-prebuilt if missing (too large for GitHub)
+  # 缺失时自动从 opencv-prebuilt 复制 Debug DLL（文件过大，未纳入 GitHub 仓库）
   set(_PREBUILT_DBG_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../opencv-prebuilt/opencv/build/x64/vc16/bin/opencv_world490d.dll")
   set(_BUNDLED_DBG_DLL "${_BUNDLED_OPENCV_DIR}/lib/opencv_world490d.dll")
   if(NOT EXISTS "${_BUNDLED_DBG_DLL}" AND EXISTS "${_PREBUILT_DBG_DLL}")
@@ -95,10 +93,10 @@ message(STATUS "[pp_ocr] OpenCV include: ${OpenCV_INCLUDE_DIRS}")
 message(STATUS "[pp_ocr] OpenCV libs: ${OpenCV_LIBS}")
 
 # ==============================================================================
-# Plugin library
+# 插件库
 # ==============================================================================
 
-# Any new source files that you add to the plugin should be added here.
+# 添加到插件的新源文件应在此处添加
 list(APPEND PLUGIN_SOURCES
   "paddle_ocr_plugin.cpp"
   "paddle_ocr_plugin.h"
@@ -108,25 +106,25 @@ list(APPEND PLUGIN_SOURCES
   "pp_ocr_ffi.h"
 )
 
-# Define the plugin library target. Its name must not be changed.
+# 定义插件库目标，其名称不得更改
 add_library(${PLUGIN_NAME} SHARED
   "include/pp_ocr/paddle_ocr_plugin_c_api.h"
   "paddle_ocr_plugin_c_api.cpp"
   ${PLUGIN_SOURCES}
 )
 
-# Apply a standard set of build settings.
+# 应用标准构建设置
 apply_standard_settings(${PLUGIN_NAME})
 
-# Symbols are hidden by default to reduce the chance of accidental conflicts.
+# 默认隐藏符号，降低意外冲突的概率
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
 target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 
-# C++17 required for structured bindings and std::optional
+# 结构化绑定和 std::optional 需要 C++17
 target_compile_features(${PLUGIN_NAME} PRIVATE cxx_std_17)
 
-# Source include directories and library dependencies.
+# 源文件包含目录和库依赖
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -146,10 +144,10 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 )
 
 # ==============================================================================
-# Bundle DLLs with the plugin
+# 将 DLL 与插件打包
 # ==============================================================================
 set(_OPENCV_DLLS "")
-# Include both debug and release DLLs; the correct one is selected at runtime.
+# 同时包含 Debug 和 Release 的 DLL；运行时将选择正确的版本
 foreach(_dll_name opencv_world490.dll opencv_world490d.dll)
   set(_dll_path "${_BUNDLED_OPENCV_DIR}/lib/${_dll_name}")
   if(EXISTS "${_dll_path}")
@@ -164,12 +162,13 @@ set(pp_ocr_bundled_libraries
 )
 
 # ==============================================================================
-# Tests
+# 测试
 # ==============================================================================
 if (${include_${PROJECT_NAME}_tests})
 set(TEST_RUNNER "${PROJECT_NAME}_test")
 enable_testing()
 
+# 通过 FetchContent 下载 GoogleTest 1.11.0
 include(FetchContent)
 FetchContent_Declare(
   googletest
@@ -179,6 +178,7 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 set(INSTALL_GTEST OFF CACHE BOOL "Disable installation of googletest" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+# 构建测试可执行文件
 add_executable(${TEST_RUNNER}
   test/paddle_ocr_plugin_test.cpp
   ${PLUGIN_SOURCES}
@@ -190,6 +190,7 @@ target_include_directories(${TEST_RUNNER} PRIVATE
 )
 target_link_libraries(${TEST_RUNNER} PRIVATE flutter_wrapper_plugin)
 target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
+# 构建后将 Flutter 库复制到测试输出目录
 add_custom_command(TARGET ${TEST_RUNNER} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
   "${FLUTTER_LIBRARY}" $<TARGET_FILE_DIR:${TEST_RUNNER}>

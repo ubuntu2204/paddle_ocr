@@ -38,9 +38,7 @@ example/windows/flutter/generated_plugin_registrant.h
 example/windows/flutter/generated_plugins.cmake
 example/windows/flutter/generated_config.cmake
 
-# Pre-built dependencies (auto-downloaded by CMake)
-opencv-prebuilt/
-onnxruntime-cache/
+# Pre-built dependencies (已内置到 windows/third_party/，无需缓存目录)
 
 # OS-specific files
 Thumbs.db

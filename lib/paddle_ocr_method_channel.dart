@@ -4,14 +4,17 @@ import 'package:flutter/services.dart';
 import 'paddle_ocr_platform_interface.dart';
 import 'src/ocr_result.dart';
 
-/// MethodChannel implementation of [PaddleOcrPlatform].
+/// [PaddleOcrPlatform] 的 MethodChannel 实现。
 class MethodChannelPaddleOcr extends PaddleOcrPlatform {
+  /// 与原生端通信的 MethodChannel，名称为 'paddle_ocr'。
   final MethodChannel _channel = const MethodChannel('paddle_ocr');
 
-  /// Log a debug message.
+  /// 输出调试日志。
+  ///
+  /// 同时通过 [developer.log] 和 [print] 输出，便于在控制台中查看。
   void _log(String message, {Object? error, StackTrace? stackTrace}) {
     developer.log(message, name: 'PaddleOcr', error: error, stackTrace: stackTrace);
-    // Also print to console for easy visibility
+    // 同时打印到控制台，便于直观查看
     // ignore: avoid_print
     print('[PaddleOcr] $message');
     if (error != null) {
@@ -100,7 +103,7 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
     }
   }
 
-  /// Parse the raw result list from native, with detailed error reporting.
+  /// 解析原生返回的原始结果列表，并提供详细的错误报告。
   List<OcrResult> _parseResults(List<dynamic> rawList) {
     final results = <OcrResult>[];
     for (int i = 0; i < rawList.length; i++) {
@@ -108,7 +111,7 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
       _log('_parseResults: item[$i] type=${item.runtimeType}');
       try {
         final map = item as Map<dynamic, dynamic>;
-        // Log the raw map keys and text for debugging
+        // 记录原始 map 的键和文本，便于调试
         final keys = map.keys.map((k) => k.toString()).toList();
         _log('_parseResults: item[$i] keys=$keys');
 
@@ -125,7 +128,7 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
       } on FormatException catch (e) {
         _log('_parseResults: FormatException at item[$i]! offset=${e.offset} '
             'message=${e.message}');
-        // Log the raw item data for debugging
+        // 记录原始项数据，便于调试
         if (item is Map) {
           final text = item['text'];
           if (text is String) {

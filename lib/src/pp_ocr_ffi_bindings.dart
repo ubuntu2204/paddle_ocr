@@ -7,36 +7,41 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 
 // ---------------------------------------------------------------------------
-// FFI type definitions
+// FFI 类型定义
 // ---------------------------------------------------------------------------
 
-/// Opaque handle to an OCR engine instance.
+/// OCR 引擎实例的不透明句柄。
 typedef PpOcrEngineC = Pointer<Void>;
 
-/// A single OCR result item (C struct).
+/// 单个 OCR 结果项（C 结构体）。
 final class PpOcrResultItemC extends Struct {
-  /// 4 points: [x0,y0, x1,y1, x2,y2, x3,y3]
+  /// 4 个角点坐标：[x0,y0, x1,y1, x2,y2, x3,y3]
   @Array(8)
   external Array<Double> box;
 
+  /// 识别出的文本内容（UTF-8 字符串指针）。
   external Pointer<Utf8> text;
 
+  /// 识别置信度。
   @Double()
   external double confidence;
 }
 
-/// Array of OCR results (C struct).
+/// OCR 结果数组（C 结构体）。
 final class PpOcrResultArrayC extends Struct {
+  /// 结果项数组指针。
   external Pointer<PpOcrResultItemC> items;
 
+  /// 结果项数量。
   @Int32()
   external int count;
 
+  /// 错误信息指针（为 nullptr 表示无错误）。
   external Pointer<Utf8> error;
 }
 
 // ---------------------------------------------------------------------------
-// C function signatures (native)
+// C 函数签名（原生侧）
 // ---------------------------------------------------------------------------
 
 typedef _CreateNative = Pointer<Void> Function();
@@ -52,7 +57,7 @@ typedef _RecognizeBytesNative = PpOcrResultArrayC Function(
 typedef _VersionNative = Pointer<Utf8> Function();
 
 // ---------------------------------------------------------------------------
-// Dart function signatures
+// Dart 函数签名
 // ---------------------------------------------------------------------------
 
 typedef _CreateDart = Pointer<Void> Function();
@@ -68,23 +73,28 @@ typedef _RecognizeBytesDart = PpOcrResultArrayC Function(
 typedef _VersionDart = Pointer<Utf8> Function();
 
 // ---------------------------------------------------------------------------
-// FFI bindings
+// FFI 绑定
 // ---------------------------------------------------------------------------
 
-/// Low-level FFI bindings to the pp_ocr native library.
+/// pp_ocr 原生库的底层 FFI 绑定。
 class PpOcrFfiBindings {
   PpOcrFfiBindings._(this._dylib);
 
+  /// 单例实例。
   static PpOcrFfiBindings? _instance;
 
-  /// Get the singleton instance, loading the DLL on first access.
+  /// 获取单例实例，首次访问时加载 DLL。
   static PpOcrFfiBindings get instance {
     _instance ??= PpOcrFfiBindings._(_loadLibrary());
     return _instance!;
   }
 
+  /// 已加载的动态库。
   final DynamicLibrary _dylib;
 
+  /// 加载原生动态库。
+  ///
+  /// 目前仅支持 Windows 平台。
   static DynamicLibrary _loadLibrary() {
     if (Platform.isWindows) {
       return DynamicLibrary.open('pp_ocr_plugin.dll');
@@ -114,13 +124,13 @@ class PpOcrFfiBindings {
   late final _version =
       _dylib.lookupFunction<_VersionNative, _VersionDart>('pp_ocr_version');
 
-  /// Create a new OCR engine.
+  /// 创建新的 OCR 引擎实例。
   Pointer<Void> create() => _create();
 
-  /// Destroy an OCR engine.
+  /// 销毁指定的 OCR 引擎实例。
   void destroy(Pointer<Void> engine) => _destroy(engine);
 
-  /// Initialize the engine with model paths.
+  /// 使用模型路径初始化引擎。
   bool initialize(Pointer<Void> engine, String detPath, String recPath,
       String dictPath) {
     final detPtr = detPath.toNativeUtf8();
@@ -135,24 +145,24 @@ class PpOcrFfiBindings {
     }
   }
 
-  /// Check if engine is initialized.
+  /// 检查引擎是否已初始化。
   bool isInitialized(Pointer<Void> engine) =>
       _isInitialized(engine) != 0;
 
-  /// Get last error message.
+  /// 获取最近一次的错误信息。
   String? getLastError(Pointer<Void> engine) {
     final ptr = _getLastError(engine);
     if (ptr == nullptr) return null;
     return ptr.toDartString();
   }
 
-  /// Get version string.
+  /// 获取版本字符串。
   String version() {
     final ptr = _version();
     return ptr.toDartString();
   }
 
-  /// Recognize text from image file path.
+  /// 从图片文件路径识别文字。
   PpOcrResultArrayC recognizeFile(Pointer<Void> engine, String imagePath) {
     final pathPtr = imagePath.toNativeUtf8();
     try {
@@ -162,7 +172,7 @@ class PpOcrFfiBindings {
     }
   }
 
-  /// Recognize text from image bytes.
+  /// 从图片字节数据识别文字。
   PpOcrResultArrayC recognizeBytes(
       Pointer<Void> engine, Uint8List bytes) {
     final ptr = calloc<Uint8>(bytes.length);

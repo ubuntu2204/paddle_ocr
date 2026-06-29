@@ -14,8 +14,8 @@
 namespace paddle_ocr {
 
 // ============================================================================
-// Utility: Validate and sanitize UTF-8 string
-// Strips any invalid byte sequences to prevent Dart FormatException
+// 工具函数：验证并清理 UTF-8 字符串
+// 剔除任何无效的字节序列，防止 Dart 端抛出 FormatException
 // ============================================================================
 static std::string SanitizeUtf8(const std::string& input) {
   std::string result;
@@ -25,26 +25,26 @@ static std::string SanitizeUtf8(const std::string& input) {
     unsigned char c = static_cast<unsigned char>(input[i]);
     int seq_len = 0;
     if (c <= 0x7F) {
-      seq_len = 1;
+      seq_len = 1;           // ASCII 单字节
     } else if ((c & 0xE0) == 0xC0) {
-      seq_len = 2;
+      seq_len = 2;           // 2 字节序列
     } else if ((c & 0xF0) == 0xE0) {
-      seq_len = 3;
+      seq_len = 3;           // 3 字节序列
     } else if ((c & 0xF8) == 0xF0) {
-      seq_len = 4;
+      seq_len = 4;           // 4 字节序列
     } else {
-      // Invalid lead byte - skip
+      // 无效的起始字节，跳过
       i++;
       continue;
     }
     if (i + seq_len > input.size()) {
-      // Truncated sequence - skip remaining
+      // 序列被截断，跳过剩余字节
       break;
     }
     bool valid = true;
     for (int j = 1; j < seq_len; ++j) {
       if ((static_cast<unsigned char>(input[i + j]) & 0xC0) != 0x80) {
-        valid = false;
+        valid = false;       // 续延字节不符合要求
         break;
       }
     }
@@ -57,7 +57,7 @@ static std::string SanitizeUtf8(const std::string& input) {
 }
 
 // ============================================================================
-// Utility: Convert std::string (UTF-8) to std::wstring (for Windows/ORT)
+// 工具函数：将 std::string (UTF-8) 转换为 std::wstring (宽字符，用于 Windows API/ORT)
 // ============================================================================
 static std::wstring ToWString(const std::string& s) {
   if (s.empty()) return L"";
@@ -68,25 +68,25 @@ static std::wstring ToWString(const std::string& s) {
 }
 
 // ============================================================================
-// Utility: GetRotatedCropImage - crop text region by 4-point polygon
+// 工具函数：GetRotatedCropImage - 通过四点多边形裁剪文本区域
+// 将倾斜的文本区域透视变换为水平矩形
 // ============================================================================
 static cv::Mat GetRotatedCropImage(const cv::Mat& image,
                                    const std::vector<cv::Point>& pts) {
   if (pts.size() != 4) return cv::Mat();
 
-  // Reorder points to a canonical TL, TR, BR, BL order.
-  // cv::minAreaRect().points() can return points in any rotation/order,
-  // which causes width/height to be swapped.
-  // Strategy: sort by y to get top-2 and bottom-2, then by x within each pair.
+  // 将点重排为标准顺序：左上(TL)、右上(TR)、右下(BR)、左下(BL)。
+  // cv::minAreaRect().points() 返回的点顺序不确定，可能导致宽高颠倒。
+  // 策略：先按 y 排序得到上2点和下2点，再在每对中按 x 排序。
   std::vector<cv::Point> p = pts;
   std::sort(p.begin(), p.end(),
             [](const cv::Point& a, const cv::Point& b) {
               if (a.y != b.y) return a.y < b.y;
               return a.x < b.x;
             });
-  // p[0], p[1] are the top-2 (smallest y); p[2], p[3] are the bottom-2.
-  // Among top-2: smaller x = TL, larger x = TR
-  // Among bottom-2: smaller x = BL, larger x = BR
+  // p[0], p[1] 是上2点（y最小）；p[2], p[3] 是下2点。
+  // 上2点中：x小=左上(TL)，x大=右上(TR)
+  // 下2点中：x小=左下(BL)，x大=右下(BR)
   cv::Point tl, tr, bl, br;
   if (p[0].x <= p[1].x) { tl = p[0]; tr = p[1]; }
   else                  { tl = p[1]; tr = p[0]; }
@@ -94,7 +94,7 @@ static cv::Mat GetRotatedCropImage(const cv::Mat& image,
   else                  { bl = p[3]; br = p[2]; }
   std::vector<cv::Point> ordered = {tl, tr, br, bl};
 
-  // Calculate width (TL->TR) and height (TL->BL) from ordered points
+  // 从有序点计算宽度(TL->TR)和高度(TL->BL)
   float w1 = static_cast<float>(std::sqrt(
       std::pow(ordered[0].x - ordered[1].x, 2.0) +
       std::pow(ordered[0].y - ordered[1].y, 2.0)));  // TL->TR
@@ -113,12 +113,14 @@ static cv::Mat GetRotatedCropImage(const cv::Mat& image,
 
   if (crop_w <= 0 || crop_h <= 0) return cv::Mat();
 
+  // 源点（原图中的四点）
   std::vector<cv::Point2f> src_pts = {
       cv::Point2f(static_cast<float>(ordered[0].x), static_cast<float>(ordered[0].y)),
       cv::Point2f(static_cast<float>(ordered[1].x), static_cast<float>(ordered[1].y)),
       cv::Point2f(static_cast<float>(ordered[2].x), static_cast<float>(ordered[2].y)),
       cv::Point2f(static_cast<float>(ordered[3].x), static_cast<float>(ordered[3].y))};
 
+  // 目标点（裁剪后矩形的四角）
   std::vector<cv::Point2f> dst_pts = {
       cv::Point2f(0, 0),
       cv::Point2f(static_cast<float>(crop_w - 1), 0),
@@ -126,6 +128,7 @@ static cv::Mat GetRotatedCropImage(const cv::Mat& image,
                   static_cast<float>(crop_h - 1)),
       cv::Point2f(0, static_cast<float>(crop_h - 1))};
 
+  // 透视变换矩阵
   cv::Mat M = cv::getPerspectiveTransform(src_pts, dst_pts);
   cv::Mat crop_img;
   cv::warpPerspective(image, crop_img, M, cv::Size(crop_w, crop_h),
@@ -134,20 +137,22 @@ static cv::Mat GetRotatedCropImage(const cv::Mat& image,
 }
 
 // ============================================================================
-// TextDetector
+// 文本检测器 TextDetector 实现
+// 基于 DB (Differentiable Binarization) 模型的文字检测
 // ============================================================================
 
 TextDetector::TextDetector() : env_(ORT_LOGGING_LEVEL_WARNING, "OcrDet") {}
 TextDetector::~TextDetector() = default;
 
+// 初始化检测模型
 bool TextDetector::Initialize(const std::string& model_path) {
   Ort::SessionOptions session_options;
-  session_options.SetIntraOpNumThreads(4);
+  session_options.SetIntraOpNumThreads(4);  // 使用4线程进行推理
   session_options.SetGraphOptimizationLevel(
       GraphOptimizationLevel::ORT_ENABLE_ALL);
 
   std::wstring wide_path = ToWString(model_path);
-  // Let Ort::Exception propagate so OcrEngine can capture the message
+  // 让 Ort::Exception 向上传播，以便 OcrEngine 捕获错误信息
   session_ = Ort::Session(env_, wide_path.c_str(), session_options);
   Ort::AllocatorWithDefaultOptions alloc;
   auto in_name = session_.GetInputNameAllocated(0, alloc);
@@ -157,6 +162,7 @@ bool TextDetector::Initialize(const std::string& model_path) {
   return true;
 }
 
+// 检测图片中的文本区域
 std::vector<std::vector<cv::Point>> TextDetector::Detect(
     const cv::Mat& image) {
   if (!session_) return {};
@@ -171,7 +177,7 @@ std::vector<std::vector<cv::Point>> TextDetector::Detect(
           image.cols, image.rows, input_w, input_h);
   OCR_LOG("Detect: ratio_h=%.4f ratio_w=%.4f", ratio_h, ratio_w);
 
-  // Convert HWC Mat to NCHW float vector
+  // 将 HWC 格式的 Mat 转换为 NCHW 格式的浮点向量
   std::vector<float> input_data(1 * 3 * input_h * input_w);
   std::vector<cv::Mat> bgr_channels(3);
   cv::split(input_tensor_mat, bgr_channels);
@@ -181,7 +187,7 @@ std::vector<std::vector<cv::Point>> TextDetector::Detect(
                 input_h * input_w * sizeof(float));
   }
 
-  // Create input tensor
+  // 创建输入张量
   std::array<int64_t, 4> input_shape = {1, 3, input_h, input_w};
   auto memory_info = Ort::MemoryInfo::CreateCpu(
       OrtArenaAllocator, OrtMemTypeDefault);
@@ -192,13 +198,13 @@ std::vector<std::vector<cv::Point>> TextDetector::Detect(
   const char* in_names[] = {input_name_.c_str()};
   const char* out_names[] = {output_name_.c_str()};
 
-  // Run inference
+  // 执行推理
   try {
     auto output_tensors = session_.Run(
         Ort::RunOptions{nullptr}, in_names, &input_tensor, 1,
         out_names, 1);
 
-    // Get output
+    // 获取输出数据
     float* output_data = output_tensors[0].GetTensorMutableData<float>();
     auto output_shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
     OCR_LOG("Detect: output shape=[%lld, %lld, %lld, %lld]",
@@ -210,7 +216,7 @@ std::vector<std::vector<cv::Point>> TextDetector::Detect(
     int out_h = static_cast<int>(output_shape[2]);
     int out_w = static_cast<int>(output_shape[3]);
 
-    // Analyze output statistics
+    // 分析输出统计信息
     int total = out_h * out_w;
     float min_val = output_data[0], max_val = output_data[0];
     double sum = 0.0;
@@ -239,13 +245,14 @@ std::vector<std::vector<cv::Point>> TextDetector::Detect(
   }
 }
 
+// 预处理：缩放、填充、归一化
 cv::Mat TextDetector::Preprocess(const cv::Mat& image, float& ratio_h,
                                  float& ratio_w) {
   int h = image.rows;
   int w = image.cols;
   float ratio = 1.0f;
 
-  // Resize so that max side <= max_side_len_
+  // 缩放使最大边 <= max_side_len_
   if (h > max_side_len_ || w > max_side_len_) {
     if (h > w) {
       ratio = static_cast<float>(max_side_len_) / h;
@@ -257,32 +264,33 @@ cv::Mat TextDetector::Preprocess(const cv::Mat& image, float& ratio_h,
   int resize_h = std::max(static_cast<int>(std::round(h * ratio)), 1);
   int resize_w = std::max(static_cast<int>(std::round(w * ratio)), 1);
 
-  // Pad to multiple of 32
+  // 填充到 32 的倍数（DB模型要求）
   resize_h = std::max(resize_h, 32);
   resize_w = std::max(resize_w, 32);
   if (resize_h % 32 != 0) resize_h = (resize_h / 32 + 1) * 32;
   if (resize_w % 32 != 0) resize_w = (resize_w / 32 + 1) * 32;
 
+  // 记录缩放比例（用于后续坐标还原）
   ratio_h = static_cast<float>(h) / resize_h;
   ratio_w = static_cast<float>(w) / resize_w;
 
   cv::Mat resized;
   cv::resize(image, resized, cv::Size(resize_w, resize_h));
 
-  // Pad with zeros if needed
+  // 如需则用零填充
   if (resized.rows < resize_h || resized.cols < resize_w) {
     cv::Mat padded = cv::Mat::zeros(resize_h, resize_w, resized.type());
     resized.copyTo(padded(cv::Rect(0, 0, resized.cols, resized.rows)));
     resized = padded;
   }
 
-  // Normalize with ImageNet mean/std, convert BGR->RGB
+  // 归一化：使用 ImageNet 均值/标准差，BGR->RGB
   cv::Mat float_img;
   resized.convertTo(float_img, CV_32FC3, 1.0 / 255.0);
 
   std::vector<cv::Mat> channels(3);
   cv::split(float_img, channels);
-  // BGR -> RGB and normalize
+  // BGR -> RGB 并归一化
   float mean_vals[] = {0.485f, 0.456f, 0.406f};  // R, G, B
   float std_vals[] = {0.229f, 0.224f, 0.225f};
   // channels: 0=B, 1=G, 2=R
@@ -295,13 +303,14 @@ cv::Mat TextDetector::Preprocess(const cv::Mat& image, float& ratio_h,
   return normalized;
 }
 
+// 后处理：二值化 + 轮廓检测
 std::vector<std::vector<cv::Point>> TextDetector::PostProcess(
     const float* output, int out_h, int out_w,
     float ratio_h, float ratio_w) {
-  // Convert output to cv::Mat
+  // 将输出转为 cv::Mat
   cv::Mat pred(out_h, out_w, CV_32FC1, const_cast<float*>(output));
 
-  // Threshold
+  // 二值化
   cv::Mat binary;
   cv::threshold(pred, binary, det_db_thresh_, 1.0, cv::THRESH_BINARY);
   binary.convertTo(binary, CV_8UC1);
@@ -309,16 +318,17 @@ std::vector<std::vector<cv::Point>> TextDetector::PostProcess(
   return BoxesFromBitmap(pred, binary, ratio_w, ratio_h);
 }
 
+// 从二值化图中提取文本框
 std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
     const cv::Mat& pred, const cv::Mat& mask,
     float ratio_w, float ratio_h) {
-  // Dilate mask slightly for better contour detection
+  // 轻微膨胀以改善轮廓检测
   cv::Mat dilated;
   cv::Mat kernel = cv::getStructuringElement(
       cv::MORPH_RECT, cv::Size(2, 2));
   cv::dilate(mask, dilated, kernel);
 
-  // Find contours
+  // 查找轮廓
   std::vector<std::vector<cv::Point>> contours;
   cv::findContours(dilated, contours, cv::RETR_LIST,
                    cv::CHAIN_APPROX_SIMPLE);
@@ -336,7 +346,7 @@ std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
       continue;
     }
 
-    // Get minimum area bounding rectangle
+    // 获取最小外接矩形
     cv::RotatedRect rect = cv::minAreaRect(contour);
     float short_side = std::min(rect.size.width, rect.size.height);
     if (short_side < 3.0f) {
@@ -346,7 +356,7 @@ std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
       continue;
     }
 
-    // Check box score
+    // 检查框的得分
     std::vector<cv::Point> box_pts(4);
     cv::Point2f vertices[4];
     rect.points(vertices);
@@ -363,7 +373,7 @@ std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
       continue;
     }
 
-    // Unclip (expand) the polygon
+    // Unclip（扩展多边形）
     std::vector<cv::Point> unclip_box;
     Unclip(box_pts, unclip_box, det_db_unclip_ratio_);
     if (unclip_box.empty()) {
@@ -371,7 +381,7 @@ std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
       continue;
     }
 
-    // Get the final bounding rectangle from unclipped polygon
+    // 从扩展后的多边形获取最终外接矩形
     cv::RotatedRect final_rect = cv::minAreaRect(unclip_box);
     if (std::min(final_rect.size.width, final_rect.size.height) < 5.0f) {
       OCR_LOG("BoxesFromBitmap: contour[%zu] final too small: %.1fx%.1f",
@@ -382,7 +392,7 @@ std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
     cv::Point2f final_vertices[4];
     final_rect.points(final_vertices);
 
-    // Scale back to original image coordinates
+    // 缩放回原图坐标
     std::vector<cv::Point> result_box(4);
     for (int i = 0; i < 4; ++i) {
       result_box[i].x = static_cast<int>(
@@ -396,7 +406,7 @@ std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
   OCR_LOG("BoxesFromBitmap: results: %zu (skipped: size=%d score=%d unclip=%d)",
           results.size(), skipped_size, skipped_score, skipped_unclip);
 
-  // Sort boxes by y-coordinate (top to bottom), then x (left to right)
+  // 按 y 坐标排序（从上到下），再按 x 排序（从左到右）
   std::sort(results.begin(), results.end(),
             [](const std::vector<cv::Point>& a,
                const std::vector<cv::Point>& b) {
@@ -411,11 +421,11 @@ std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
   return results;
 }
 
+// 计算多边形区域内的平均得分
+// 使用多边形掩码计算平均分数（PaddleOCR "slow" 模式）。
+// 比外接矩形平均更准确，因为它排除了文本多边形外的背景像素。
 float TextDetector::BoxScore(const cv::Mat& pred,
                              const std::vector<cv::Point>& box) {
-  // Use polygon mask to compute mean score (PaddleOCR "slow" mode).
-  // This is more accurate than bounding-rect mean because it excludes
-  // background pixels outside the text polygon.
   int xmin = std::max(0, std::min({box[0].x, box[1].x, box[2].x, box[3].x}));
   int xmax = std::min(pred.cols - 1,
                       std::max({box[0].x, box[1].x, box[2].x, box[3].x}));
@@ -425,10 +435,10 @@ float TextDetector::BoxScore(const cv::Mat& pred,
 
   if (xmin >= xmax || ymin >= ymax) return 0.0f;
 
-  // Crop the region of interest
+  // 裁剪感兴趣区域
   cv::Mat roi = pred(cv::Rect(xmin, ymin, xmax - xmin + 1, ymax - ymin + 1));
 
-  // Build polygon mask shifted to ROI coordinates
+  // 构建偏移到 ROI 坐标系的多边形掩码
   std::vector<cv::Point> shifted_box;
   shifted_box.reserve(box.size());
   for (const auto& pt : box) {
@@ -438,15 +448,17 @@ float TextDetector::BoxScore(const cv::Mat& pred,
   cv::Mat mask = cv::Mat::zeros(roi.size(), CV_8UC1);
   cv::fillPoly(mask, shifted_box, cv::Scalar(1));
 
-  // Compute mean only over masked pixels
+  // 仅计算掩码区域的平均得分
   return static_cast<float>(cv::mean(roi, mask)[0]);
 }
 
+// Unclip：扩展多边形，使检测框覆盖更完整的文本区域
+// 使用鞋带公式计算多边形面积和周长，保留有符号面积以判断绕行方向
 void TextDetector::Unclip(const std::vector<cv::Point>& in_poly,
                           std::vector<cv::Point>& out_poly,
                           float unclip_ratio) {
-  // Compute polygon area and perimeter using the shoelace formula.
-  // Keep the SIGNED area to determine winding order.
+  // 使用鞋带公式计算多边形面积和周长。
+  // 保留有符号面积以判断绕行方向。
   float signed_area = 0.0f;
   float perimeter = 0.0f;
   int n = static_cast<int>(in_poly.size());
@@ -465,23 +477,22 @@ void TextDetector::Unclip(const std::vector<cv::Point>& in_poly,
     return;
   }
 
+  // 计算扩展距离
   float distance = area * unclip_ratio / perimeter;
 
-  // Determine outward normal sign based on winding order.
-  // In image coordinates (y down), shoelace area > 0 means clockwise.
-  // For clockwise polygons, the outward normal is to the RIGHT of the
-  // edge direction: (dy, -dx).  For counterclockwise it is to the LEFT:
-  // (-dy, dx).
+  // 根据绕行方向确定外法线符号。
+  // 在图像坐标系（y 向下）中，鞋带面积 > 0 表示顺时针。
+  // 对于顺时针多边形，外法线在边的右侧：(dy, -dx)。
+  // 对于逆时针多边形，外法线在边的左侧：(-dy, dx)。
   float normal_sign = (signed_area > 0) ? 1.0f : -1.0f;
 
-  // Expand each vertex outward along the average of its two adjacent
-  // edge normals (mitered offset).
+  // 沿相邻两条边的法线平均值（斜接偏移）向外扩展每个顶点。
   std::vector<cv::Point2f> expanded(n);
   for (int i = 0; i < n; ++i) {
     int prev = (i - 1 + n) % n;
     int next = (i + 1) % n;
 
-    // Edge vectors (normalized)
+    // 边向量（归一化）
     float e1x = static_cast<float>(in_poly[i].x - in_poly[prev].x);
     float e1y = static_cast<float>(in_poly[i].y - in_poly[prev].y);
     float e2x = static_cast<float>(in_poly[next].x - in_poly[i].x);
@@ -492,14 +503,14 @@ void TextDetector::Unclip(const std::vector<cv::Point>& in_poly,
     if (len1 > 0) { e1x /= len1; e1y /= len1; }
     if (len2 > 0) { e2x /= len2; e2y /= len2; }
 
-    // Outward normals — direction depends on winding order.
-    // Right normal: (dy, -dx), Left normal: (-dy, dx)
+    // 外法线——方向取决于绕行顺序。
+    // 右法线：(dy, -dx)，左法线：(-dy, dx)
     float n1x = normal_sign * e1y;
     float n1y = normal_sign * (-e1x);
     float n2x = normal_sign * e2y;
     float n2y = normal_sign * (-e2x);
 
-    // Average normal (mitered)
+    // 平均法线（斜接）
     float avg_nx = n1x + n2x;
     float avg_ny = n1y + n2y;
     float avg_len = std::sqrt(avg_nx * avg_nx + avg_ny * avg_ny);
@@ -509,8 +520,7 @@ void TextDetector::Unclip(const std::vector<cv::Point>& in_poly,
     expanded[i].y = static_cast<float>(in_poly[i].y) + avg_ny * distance;
   }
 
-  // Verify the expansion actually increased the area; if not, the normal
-  // direction was wrong — flip it (safety net).
+  // 验证扩展是否确实增加了面积；如果没有，说明法线方向错误——翻转。
   float new_signed_area = 0.0f;
   for (int i = 0; i < n; ++i) {
     int j = (i + 1) % n;
@@ -519,7 +529,7 @@ void TextDetector::Unclip(const std::vector<cv::Point>& in_poly,
   }
   float new_area = std::abs(new_signed_area) / 2.0f;
   if (new_area < area) {
-    // Expansion went the wrong way — flip normals and redo.
+    // 扩展方向错误——翻转法线并重新计算。
     OCR_LOG("Unclip: WARNING - expansion decreased area (%.1f -> %.1f), "
             "flipping normals", area, new_area);
     for (int i = 0; i < n; ++i) {
@@ -546,6 +556,7 @@ void TextDetector::Unclip(const std::vector<cv::Point>& in_poly,
     }
   }
 
+  // 四舍五入为整数坐标
   out_poly.resize(n);
   for (int i = 0; i < n; ++i) {
     out_poly[i].x = static_cast<int>(std::round(expanded[i].x));
@@ -554,13 +565,15 @@ void TextDetector::Unclip(const std::vector<cv::Point>& in_poly,
 }
 
 // ============================================================================
-// TextRecognizer
+// 文本识别器 TextRecognizer 实现
+// 基于 CRNN + CTC 模型的文字识别
 // ============================================================================
 
 TextRecognizer::TextRecognizer()
     : env_(ORT_LOGGING_LEVEL_WARNING, "OcrRec") {}
 TextRecognizer::~TextRecognizer() = default;
 
+// 初始化识别模型和字典
 bool TextRecognizer::Initialize(const std::string& model_path,
                                 const std::string& dict_path) {
   Ort::SessionOptions session_options;
@@ -569,7 +582,7 @@ bool TextRecognizer::Initialize(const std::string& model_path,
       GraphOptimizationLevel::ORT_ENABLE_ALL);
 
   std::wstring wide_path = ToWString(model_path);
-  // Let Ort::Exception propagate so OcrEngine can capture the message
+  // 让 Ort::Exception 向上传播，以便 OcrEngine 捕获错误信息
   session_ = Ort::Session(env_, wide_path.c_str(), session_options);
   Ort::AllocatorWithDefaultOptions alloc;
   auto in_name = session_.GetInputNameAllocated(0, alloc);
@@ -580,13 +593,14 @@ bool TextRecognizer::Initialize(const std::string& model_path,
   return LoadDict(dict_path);
 }
 
+// 加载字典文件
 bool TextRecognizer::LoadDict(const std::string& dict_path) {
   OCR_LOG("LoadDict: path='%s'", dict_path.c_str());
 
-  // Clear any previously loaded dict (supports re-initialization)
+  // 清除之前加载的字典（支持重复初始化）
   dict_.clear();
 
-  // Open in binary mode to detect encoding / BOM
+  // 以二进制模式打开以检测编码/BOM
   std::ifstream file(dict_path, std::ios::in | std::ios::binary);
   if (!file.is_open()) {
     OCR_LOG("LoadDict: FAILED to open file: %s", dict_path.c_str());
@@ -594,14 +608,14 @@ bool TextRecognizer::LoadDict(const std::string& dict_path) {
     return false;
   }
 
-  // Read entire file into a buffer for encoding analysis
+  // 将整个文件读入缓冲区以进行编码分析
   std::string file_content((std::istreambuf_iterator<char>(file)),
                             std::istreambuf_iterator<char>());
   file.close();
 
   OCR_LOG("LoadDict: file size=%zu bytes", file_content.size());
 
-  // Check for BOM
+  // 检查 BOM 标记
   if (file_content.size() >= 3 &&
       static_cast<unsigned char>(file_content[0]) == 0xEF &&
       static_cast<unsigned char>(file_content[1]) == 0xBB &&
@@ -622,34 +636,34 @@ bool TextRecognizer::LoadDict(const std::string& dict_path) {
     OCR_LOG("LoadDict: No BOM detected (assuming UTF-8)");
   }
 
-  // Dump first 64 bytes for encoding verification
+  // 输出前 64 字节的十六进制转储以验证编码
   OCR_LOG("LoadDict: first 64 bytes hex: %s",
           HexDump(file_content.substr(0, 64)).c_str());
 
-  // Validate that the file is valid UTF-8
+  // 验证文件是否为有效的 UTF-8
   std::string utf8_err = ValidateUtf8Detailed(file_content);
   if (!utf8_err.empty()) {
     OCR_LOG("LoadDict: WARNING - file is NOT valid UTF-8: %s", utf8_err.c_str());
     fprintf(stderr, "Dict file UTF-8 validation error: %s\n", utf8_err.c_str());
-    // Continue anyway - SanitizeUtf8 will clean individual entries
+    // 仍然继续——SanitizeUtf8 会清理各个条目
   } else {
     OCR_LOG("LoadDict: file is valid UTF-8");
   }
 
-  // Parse lines from the in-memory buffer
+  // 从内存缓冲区解析行
   std::istringstream stream(file_content);
   std::string line;
   int line_num = 0;
   while (std::getline(stream, line)) {
     line_num++;
-    // Remove trailing \r if present (Windows line endings)
+    // 移除行尾的 \r（Windows 换行符）
     if (!line.empty() && line.back() == '\r') {
       line.pop_back();
     }
     if (line.empty()) {
       continue;
     }
-    // Validate each dict entry is valid UTF-8
+    // 验证每个字典条目是否为有效的 UTF-8
     std::string entry_err = ValidateUtf8Detailed(line);
     if (!entry_err.empty()) {
       OCR_LOG("LoadDict: WARNING - line %d has invalid UTF-8: %s | hex: %s",
@@ -667,7 +681,7 @@ bool TextRecognizer::LoadDict(const std::string& dict_path) {
     return false;
   }
 
-  // Log first 5 and last 5 entries for verification
+  // 输出前 5 条和后 5 条以供验证
   OCR_LOG("LoadDict: first 5 entries:");
   for (size_t i = 0; i < std::min(dict_.size(), size_t(5)); ++i) {
     OCR_LOG("  [%zu] hex: %s", i, HexDump(dict_[i]).c_str());
@@ -682,6 +696,7 @@ bool TextRecognizer::LoadDict(const std::string& dict_path) {
   return true;
 }
 
+// 识别每个文本区域中的文字
 std::vector<std::pair<std::string, float>> TextRecognizer::Recognize(
     const cv::Mat& image,
     const std::vector<std::vector<cv::Point>>& boxes) {
@@ -700,7 +715,7 @@ std::vector<std::pair<std::string, float>> TextRecognizer::Recognize(
     int crop_h = crop.rows;
     int crop_w = crop.cols;
 
-    // Convert to NCHW float tensor
+    // 转换为 NCHW 浮点张量
     std::vector<float> input_data(1 * 3 * crop_h * crop_w);
     std::vector<cv::Mat> channels(3);
     cv::split(crop, channels);
@@ -731,9 +746,9 @@ std::vector<std::pair<std::string, float>> TextRecognizer::Recognize(
       auto out_shape =
           output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
 
-      // Output shape: [batch, seq_len, num_classes] (3D)
-      //         or:   [seq_len, num_classes] (2D, batch squeezed)
-      // NOTE: out_shape[0] is batch (usually 1), NOT seq_len!
+      // 输出形状: [batch, seq_len, num_classes] (3D)
+      //       或: [seq_len, num_classes] (2D，batch 已被压缩)
+      // 注意：out_shape[0] 是 batch（通常为1），不是 seq_len！
       int seq_len, num_classes;
       if (out_shape.size() == 3) {
         seq_len = static_cast<int>(out_shape[1]);      // [1, seq_len, classes]
@@ -766,6 +781,7 @@ std::vector<std::pair<std::string, float>> TextRecognizer::Recognize(
   return results;
 }
 
+// 预处理裁剪区域：缩放到固定高度、保持宽高比、归一化
 cv::Mat TextRecognizer::PreprocessCrop(
     const cv::Mat& image, const std::vector<cv::Point>& box) {
   cv::Mat crop = GetRotatedCropImage(image, box);
@@ -773,7 +789,7 @@ cv::Mat TextRecognizer::PreprocessCrop(
 
   OCR_LOG("PreprocessCrop: crop size %dx%d", crop.cols, crop.rows);
 
-  // Resize to fixed height, keep aspect ratio
+  // 缩放到固定高度，保持宽高比
   int h = crop.rows;
   int w = crop.cols;
   float ratio = static_cast<float>(rec_img_h_) / h;
@@ -785,7 +801,7 @@ cv::Mat TextRecognizer::PreprocessCrop(
   cv::Mat resized;
   cv::resize(crop, resized, cv::Size(new_w, rec_img_h_));
 
-  // Pad width to at least 32
+  // 宽度至少填充到 32
   int pad_w = std::max(new_w, 32);
   if (new_w < pad_w) {
     cv::Mat padded = cv::Mat::zeros(rec_img_h_, pad_w, resized.type());
@@ -793,7 +809,7 @@ cv::Mat TextRecognizer::PreprocessCrop(
     resized = padded;
   }
 
-  // Normalize: pixel/255, then (x - 0.5) / 0.5
+  // 归一化：pixel/255，然后 (x - 0.5) / 0.5
   cv::Mat float_img;
   resized.convertTo(float_img, CV_32FC3, 1.0 / 255.0);
   float_img = (float_img - 0.5f) / 0.5f;
@@ -802,9 +818,10 @@ cv::Mat TextRecognizer::PreprocessCrop(
   return float_img;
 }
 
+// CTC 贪心解码
 std::pair<std::string, float> TextRecognizer::DecodeOutput(
     const float* data, int seq_len, int num_classes) {
-  // CTC greedy decoding
+  // CTC 贪心解码
   std::string text;
   float total_conf = 0.0f;
   int valid_count = 0;
@@ -816,7 +833,7 @@ std::pair<std::string, float> TextRecognizer::DecodeOutput(
   for (int t = 0; t < seq_len; ++t) {
     const float* row = data + t * num_classes;
 
-    // Find argmax
+    // 寻找 argmax（最大值索引）
     int max_idx = 0;
     float max_val = row[0];
     for (int c = 1; c < num_classes; ++c) {
@@ -826,15 +843,15 @@ std::pair<std::string, float> TextRecognizer::DecodeOutput(
       }
     }
 
-    // CTC: skip blank (0) and repeated characters
+    // CTC：跳过 blank(0) 和重复字符
     if (max_idx != 0 && max_idx != last_idx) {
-      int dict_idx = max_idx - 1;  // dict starts at index 0, model output at 1
+      int dict_idx = max_idx - 1;  // 字典从索引0开始，模型输出从1开始
       if (dict_idx >= 0 && dict_idx < static_cast<int>(dict_.size())) {
         text += dict_[dict_idx];
-        // Confidence from log-softmax output: exp(log_prob)
-        // PP-OCR rec models output log-probabilities, not raw logits.
+        // 置信度来自 log-softmax 输出：exp(log_prob)
+        // PP-OCR 识别模型输出的是对数概率，不是原始 logits。
         float conf = std::exp(row[max_idx]);
-        if (conf > 1.0f) conf = 1.0f;  // clamp for numerical safety
+        if (conf > 1.0f) conf = 1.0f;  // 数值安全裁剪
         if (conf < 0.0f) conf = 0.0f;
         total_conf += conf;
         valid_count++;
@@ -843,27 +860,28 @@ std::pair<std::string, float> TextRecognizer::DecodeOutput(
                 dict_idx, dict_.size());
       }
     }
-    // Always update last_idx to correctly handle CTC collapsing:
-    // blank resets dedup, so A-blank-A should produce "AA"
+    // 始终更新 last_idx 以正确处理 CTC 合并：
+    // blank 重置去重，所以 A-blank-A 应产生 "AA"
     last_idx = max_idx;
   }
 
   float avg_conf = valid_count > 0 ? total_conf / valid_count : 0.0f;
 
-  // Debug: log raw text before sanitization
+  // 调试：记录清理前的原始文本
   OCR_LOG("DecodeOutput: raw text length=%zu bytes, conf=%.6f, valid_count=%d",
           text.size(), avg_conf, valid_count);
   OCR_LOG("DecodeOutput: raw text hex: %s", HexDump(text).c_str());
 
-  // Validate raw text
+  // 验证原始文本
   std::string raw_err = ValidateUtf8Detailed(text);
   if (!raw_err.empty()) {
     OCR_LOG("DecodeOutput: WARNING - raw text has invalid UTF-8: %s", raw_err.c_str());
   }
 
+  // 清理 UTF-8
   std::string sanitized = SanitizeUtf8(text);
 
-  // Validate sanitized text
+  // 验证清理后的文本
   std::string san_err = ValidateUtf8Detailed(sanitized);
   if (!san_err.empty()) {
     OCR_LOG("DecodeOutput: ERROR - sanitized text STILL has invalid UTF-8: %s", san_err.c_str());
@@ -877,12 +895,14 @@ std::pair<std::string, float> TextRecognizer::DecodeOutput(
 }
 
 // ============================================================================
-// OcrEngine
+// OCR 引擎 OcrEngine 实现
+// 组合检测器和识别器，提供完整的 OCR 流程
 // ============================================================================
 
 OcrEngine::OcrEngine() = default;
 OcrEngine::~OcrEngine() = default;
 
+// 初始化引擎：加载检测模型、识别模型和字典
 bool OcrEngine::Initialize(const std::string& det_model_path,
                            const std::string& rec_model_path,
                            const std::string& dict_path) {
@@ -891,7 +911,7 @@ bool OcrEngine::Initialize(const std::string& det_model_path,
   OCR_LOG("Initialize: rec_model='%s'", rec_model_path.c_str());
   OCR_LOG("Initialize: dict_path='%s'", dict_path.c_str());
 
-  // Validate paths are valid UTF-8
+  // 验证路径是否为有效的 UTF-8
   std::string det_err = ValidateUtf8Detailed(det_model_path);
   if (!det_err.empty()) OCR_LOG("Initialize: det_model_path invalid UTF-8: %s", det_err.c_str());
   std::string rec_err = ValidateUtf8Detailed(rec_model_path);
@@ -922,6 +942,8 @@ bool OcrEngine::Initialize(const std::string& det_model_path,
   return true;
 }
 
+// 识别图片中的文字（核心方法）
+// 流程：1.文本检测 -> 2.文本识别 -> 3.合并结果
 std::vector<OcrBoxResult> OcrEngine::Recognize(const cv::Mat& image) {
   if (!initialized_ || image.empty()) {
     OCR_LOG("Recognize: skipped (initialized=%d, image_empty=%d)",
@@ -932,16 +954,16 @@ std::vector<OcrBoxResult> OcrEngine::Recognize(const cv::Mat& image) {
   OCR_LOG("Recognize: image %dx%d, channels=%d",
           image.cols, image.rows, image.channels());
 
-  // Detect text regions
+  // 步骤1：检测文本区域
   auto boxes = detector_.Detect(image);
   OCR_LOG("Recognize: detected %zu text regions", boxes.size());
   if (boxes.empty()) return {};
 
-  // Recognize text in each region
+  // 步骤2：识别每个区域中的文字
   auto texts = recognizer_.Recognize(image, boxes);
   OCR_LOG("Recognize: recognized %zu text results", texts.size());
 
-  // Combine results
+  // 步骤3：合并检测结果和识别结果
   std::vector<OcrBoxResult> results;
   size_t count = std::min(boxes.size(), texts.size());
   for (size_t i = 0; i < count; ++i) {
@@ -950,12 +972,12 @@ std::vector<OcrBoxResult> OcrEngine::Recognize(const cv::Mat& image) {
     r.text = texts[i].first;
     r.confidence = texts[i].second;
 
-    // Validate each result text before sending to Flutter
+    // 在发送给 Flutter 之前验证每个结果的文本
     std::string err = ValidateUtf8Detailed(r.text);
     if (!err.empty()) {
       OCR_LOG("Recognize: ERROR - result[%zu] text has invalid UTF-8: %s", i, err.c_str());
       OCR_LOG("Recognize: result[%zu] hex: %s", i, HexDump(r.text).c_str());
-      // Sanitize again as a safety net
+      // 再次清理作为安全网
       r.text = SanitizeUtf8(r.text);
     }
 
@@ -971,6 +993,7 @@ std::vector<OcrBoxResult> OcrEngine::Recognize(const cv::Mat& image) {
   return results;
 }
 
+// 从图片字节数据识别文字
 std::vector<OcrBoxResult> OcrEngine::RecognizeFromBytes(
     const std::vector<uint8_t>& image_bytes) {
   OCR_LOG("RecognizeFromBytes: input %zu bytes", image_bytes.size());
@@ -983,12 +1006,16 @@ std::vector<OcrBoxResult> OcrEngine::RecognizeFromBytes(
   return Recognize(image);
 }
 
+// 从图片文件路径识别文字
+// 在 Windows 上，cv::imread 使用 C 运行时的 fopen()，只能处理 ANSI 编码路径。
+// 非 ASCII 路径（如中文）会静默失败。
+// 解决方案：通过宽字符 ifstream 读取文件字节，然后用 cv::imdecode 解码。
 std::vector<OcrBoxResult> OcrEngine::RecognizeFromFile(
     const std::string& image_path) {
   OCR_LOG("RecognizeFromFile: path='%s' (hex: %s)",
           image_path.c_str(), HexDump(image_path).c_str());
 
-  // Validate that the path is valid UTF-8
+  // 验证路径是否为有效的 UTF-8
   std::string path_err = ValidateUtf8Detailed(image_path);
   if (!path_err.empty()) {
     OCR_LOG("RecognizeFromFile: WARNING - image path has invalid UTF-8: %s",
@@ -996,14 +1023,14 @@ std::vector<OcrBoxResult> OcrEngine::RecognizeFromFile(
     OCR_LOG("RecognizeFromFile: This may cause issues with cv::imread on Windows");
   }
 
-  // On Windows, cv::imread uses C runtime fopen() which only handles
-  // ANSI codepage paths. Non-ASCII paths (e.g. Chinese chars) fail silently.
-  // Workaround: read file bytes via wide-char ifstream, then cv::imdecode.
+  // 在 Windows 上，cv::imread 使用 C 运行时 fopen()，只能处理
+  // ANSI 代码页路径。非 ASCII 路径（如中文）会静默失败。
+  // 解决方案：通过宽字符 ifstream 读取文件字节，然后用 cv::imdecode 解码。
   std::wstring wide_path = ToWString(image_path);
   std::ifstream file(wide_path, std::ios::binary | std::ios::ate);
   if (!file.is_open()) {
     OCR_LOG("RecognizeFromFile: failed to open file (wide path), errno=%d", errno);
-    // Fallback: try cv::imread directly (works for ASCII paths)
+    // 回退：直接尝试 cv::imread（适用于 ASCII 路径）
     OCR_LOG("RecognizeFromFile: trying cv::imread as fallback");
     cv::Mat image = cv::imread(image_path, cv::IMREAD_COLOR);
     if (image.empty()) {
