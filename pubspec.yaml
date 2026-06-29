@@ -39,7 +39,7 @@ flutter:
     platforms:
       windows:
         pluginClass: PaddleOcrPluginCApi
-        ffiPlugin: pp_ocr_plugin
+        ffiPlugin: true
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:

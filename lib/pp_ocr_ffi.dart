@@ -20,7 +20,7 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
 
   Pointer<Void>? _engine;
   bool _ffiAvailable = false;
-  PaddleOcrPlatform? _fallback;
+  MethodChannelPaddleOcr? _fallback;
 
   /// Try to use FFI; if the DLL cannot be loaded, fall back to MethodChannel.
   PaddleOcrPlatform _getImpl() {
@@ -113,10 +113,17 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     return _parseResultsC(resultC);
   }
 
+  /// Always use MethodChannel for features that require the Flutter plugin
+  /// registrar (e.g. native file dialog). FFI cannot show a file picker, so
+  /// we must NOT route through [_getImpl] (which returns [this] when FFI is
+  /// active — that would cause infinite recursion).
+  MethodChannelPaddleOcr get _methodChannel =>
+      _fallback ??= MethodChannelPaddleOcr();
+
   @override
   Future<String?> pickImage() async {
-    // pickImage uses native file dialog — delegate to MethodChannel
-    return _getImpl().pickImage();
+    // pickImage uses the native Windows file dialog — MethodChannel only.
+    return _methodChannel.pickImage();
   }
 
   @override
@@ -128,7 +135,7 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
         // fall through to method channel
       }
     }
-    return _getImpl().getPlatformVersion();
+    return _methodChannel.getPlatformVersion();
   }
 
   /// Parse C result array into Dart [OcrResult] list.

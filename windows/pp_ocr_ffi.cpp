@@ -30,19 +30,33 @@ static PpOcrResultArray convertResults(PpOcrEngine* handle,
                                        const std::vector<paddle_ocr::OcrBoxResult>& results) {
   handle->text_buffers.clear();
   handle->result_items.clear();
+
+  // Reserve capacity to prevent reallocation during push_back.
+  // Without this, text_buffers could reallocate, moving all std::string
+  // objects and invalidating the c_str() pointers already stored in
+  // result_items — causing dangling pointers and UTF-8 decode errors.
+  handle->text_buffers.reserve(results.size());
   handle->result_items.reserve(results.size());
 
+  // First pass: store all text strings. After this loop, the vector's
+  // internal storage is stable (no more push_backs), so c_str() pointers
+  // remain valid.
   for (const auto& r : results) {
+    handle->text_buffers.push_back(r.text);
+  }
+
+  // Second pass: build result items with stable c_str() pointers.
+  for (size_t i = 0; i < results.size(); ++i) {
     PpOcrResultItem item;
     // Copy box points (4 points, each x,y)
-    for (int i = 0; i < 4 && i < static_cast<int>(r.box.size()); ++i) {
-      item.box[i * 2] = static_cast<double>(r.box[i].x);
-      item.box[i * 2 + 1] = static_cast<double>(r.box[i].y);
+    for (int j = 0; j < 4 && j < static_cast<int>(results[i].box.size()); ++j) {
+      item.box[j * 2] = static_cast<double>(results[i].box[j].x);
+      item.box[j * 2 + 1] = static_cast<double>(results[i].box[j].y);
     }
-    // Store text in persistent buffer
-    handle->text_buffers.push_back(r.text);
-    item.text = handle->text_buffers.back().c_str();
-    item.confidence = static_cast<double>(r.confidence);
+    // Pointer is stable: text_buffers won't be modified again, and
+    // result_items won't reallocate (reserved to exact size).
+    item.text = handle->text_buffers[i].c_str();
+    item.confidence = static_cast<double>(results[i].confidence);
     handle->result_items.push_back(item);
   }
 
