@@ -50,7 +50,7 @@ Add this to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  pp_ocr: ^0.2.0
+  pp_ocr: ^0.2.1
 ```
 
 ## Model Files

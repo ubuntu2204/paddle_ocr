@@ -40,17 +40,27 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   // PaddleOcr 引擎实例
   final PaddleOcr _ocr = PaddleOcr();
 
-  // 模型路径配置 - 默认指向项目根目录下的 model/ 文件夹
-  // 如果你的模型位于其他位置，请更新这些路径
+  // 模型路径配置 - 自动解析项目根目录下 model/ 文件夹的绝对路径，
+  // 避免硬编码绝对路径，使项目可在任意路径（含中文）下运行。
+  // 如模型位于其他位置，可在界面输入框中修改。
   final TextEditingController _detModelCtrl = TextEditingController(
-    text: r'C:\project\paddle_ocr\model\det.onnx',
+    text: _modelPath('det.onnx'),
   );
   final TextEditingController _recModelCtrl = TextEditingController(
-    text: r'C:\project\paddle_ocr\model\inference.onnx',
+    text: _modelPath('inference.onnx'),
   );
   final TextEditingController _dictPathCtrl = TextEditingController(
-    text: r'C:\project\paddle_ocr\model\ppocr_v6_dict.txt',
+    text: _modelPath('ppocr_v6_dict.txt'),
   );
+
+  /// 解析模型文件的绝对路径。
+  ///
+  /// model 文件夹位于项目根目录（example 的上一级）。
+  /// `flutter run` 时工作目录为 example/，因此通过 `../model` 解析。
+  static String _modelPath(String name) {
+    final modelDir = Directory('${Directory.current.path}/../model');
+    return File('${modelDir.absolute.path}/$name').absolute.path;
+  }
 
   // OCR 引擎是否已初始化
   bool _initialized = false;

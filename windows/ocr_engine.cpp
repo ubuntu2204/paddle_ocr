@@ -600,8 +600,12 @@ bool TextRecognizer::LoadDict(const std::string& dict_path) {
   // 清除之前加载的字典（支持重复初始化）
   dict_.clear();
 
-  // 以二进制模式打开以检测编码/BOM
-  std::ifstream file(dict_path, std::ios::in | std::ios::binary);
+  // 以二进制模式打开以检测编码/BOM。
+  // 注意：Windows 上 std::ifstream 的 char* 构造函数按系统 ANSI 代码页
+  //（如 GBK）解释路径，UTF-8 编码的中文路径会打开失败。
+  // 因此先转为宽字符路径，使用 MSVC 的 wchar_t 构造重载。
+  std::wstring wide_dict_path = ToWString(dict_path);
+  std::ifstream file(wide_dict_path, std::ios::in | std::ios::binary);
   if (!file.is_open()) {
     OCR_LOG("LoadDict: FAILED to open file: %s", dict_path.c_str());
     fprintf(stderr, "Failed to open dict file: %s\n", dict_path.c_str());
