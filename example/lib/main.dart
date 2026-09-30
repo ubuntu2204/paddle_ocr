@@ -56,19 +56,19 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   /// 解析模型文件的绝对路径。
   ///
   /// 按以下顺序探测，命中即用：
-  /// 1. 可执行文件同级的 `model/`（部署形态，如
+  /// 1. 上一级目录的 `model/`（工作目录为 example/ 或部署机 exe 目录时，
+  ///    模型位于其上一级，如 `C:\flutter_build\model\det.onnx`）；
+  /// 2. 可执行文件同级的 `model/`（部署形态，如
   ///    `C:\flutter_build\pp_ocr_example\model\det.onnx`）；
-  /// 2. 工作目录上一级的 `model/`（`flutter run` 开发形态，工作目录为
-  ///    example/，模型位于项目根）；
-  /// 3. 都未命中时返回部署形态路径作为默认值（可在界面修改）。
+  /// 3. 都未命中时返回上一级形态路径作为默认值（可在界面修改）。
   static String _modelPath(String name) {
     final sep = Platform.isWindows ? r'\' : '/';
+    final parent = File('${Directory.current.path}${sep}..${sep}model$sep$name');
+    if (parent.existsSync()) return parent.absolute.path;
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final besideExe = File('$exeDir${sep}model$sep$name');
     if (besideExe.existsSync()) return besideExe.absolute.path;
-    final dev = File('${Directory.current.path}${sep}..${sep}model$sep$name');
-    if (dev.existsSync()) return dev.absolute.path;
-    return besideExe.absolute.path;
+    return parent.absolute.path;
   }
 
   // OCR 引擎是否已初始化
@@ -85,6 +85,29 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   double _imageWidth = 0;
   // 原始图片高度（用于精确绘制检测框）
   double _imageHeight = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkModelFiles();
+  }
+
+  /// 检查默认模型文件是否存在，缺失时在状态栏给出明确提示。
+  void _checkModelFiles() {
+    final paths = [
+      _detModelCtrl.text,
+      _recModelCtrl.text,
+      _dictPathCtrl.text,
+    ].map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+    final missing = paths.where((p) => !File(p).existsSync()).map((p) {
+      final idx = p.lastIndexOf(RegExp(r'[\\/]'));
+      return idx > 0 ? p.substring(idx + 1) : p;
+    }).toList();
+    if (missing.isEmpty) return;
+    _statusMessage = '未找到模型文件：${missing.join('、')}。'
+        '请将 model 文件夹放到程序目录的上一级，'
+        '或在上方输入框中修改路径。';
+  }
 
   @override
   void dispose() {
@@ -104,6 +127,19 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
       _loading = true;
       _statusMessage = 'Initializing OCR engine...';
     });
+    // 入口防呆：模型文件不存在时直接提示，不进入原生初始化。
+    final missing = [
+      _detModelCtrl.text.trim(),
+      _recModelCtrl.text.trim(),
+      _dictPathCtrl.text.trim(),
+    ].where((p) => p.isNotEmpty && !File(p).existsSync()).toList();
+    if (missing.isNotEmpty) {
+      setState(() {
+        _loading = false;
+        _statusMessage = '初始化失败：模型文件不存在——${missing.join('\n')}';
+      });
+      return;
+    }
     try {
       final ok = await _ocr.initialize(
         detModelPath: _detModelCtrl.text.trim(),

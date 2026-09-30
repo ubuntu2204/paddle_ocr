@@ -64,20 +64,27 @@ elseif(DEFINED ENV{OpenCV_DIR} AND EXISTS "$ENV{OpenCV_DIR}/OpenCVConfig.cmake")
   find_package(OpenCV REQUIRED)
 elseif(EXISTS "${_BUNDLED_OPENCV_DIR}/include/opencv2/opencv.hpp")
   message(STATUS "[pp_ocr] Using bundled OpenCV 4.9.0")
+  # 标记：当前使用内嵌的 MSVC OpenCV（动态库），需要随产物打包 DLL。
+  # 走 find_package 分支（如交叉编译注入的静态 OpenCV）时不打包。
+  set(_OPENCV_IS_BUNDLED ON)
+  # DLL 文件名按版本号拼接（不写字面量）：交叉构建工具会静态扫描
+  # CMakeLists 文本中的 .dll 引用，字面量会被误判为待打包的预编译产物，
+  # 而交叉构建已静态链接 OpenCV，无需打包任何 OpenCV DLL。
+  set(_OPENCV_WORLD_VERSION 490)
   set(OpenCV_INCLUDE_DIRS "${_BUNDLED_OPENCV_DIR}/include")
   # 使用生成器表达式按 Debug/Release 配置选择对应库
   set(OpenCV_LIBS
-    "$<$<CONFIG:Debug>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490d.lib>"
-    "$<$<NOT:$<CONFIG:Debug>>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.lib>"
+    "$<$<CONFIG:Debug>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world${_OPENCV_WORLD_VERSION}d.lib>"
+    "$<$<NOT:$<CONFIG:Debug>>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world${_OPENCV_WORLD_VERSION}.lib>"
   )
   set(_OPENCV_DLL
-    "$<$<CONFIG:Debug>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490d.dll>"
-    "$<$<NOT:$<CONFIG:Debug>>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world490.dll>"
+    "$<$<CONFIG:Debug>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world${_OPENCV_WORLD_VERSION}d.dll>"
+    "$<$<NOT:$<CONFIG:Debug>>:${_BUNDLED_OPENCV_DIR}/lib/opencv_world${_OPENCV_WORLD_VERSION}.dll>"
   )
 
   # 缺失时自动从 opencv-prebuilt 复制 Debug DLL（文件过大，未纳入 GitHub 仓库）
-  set(_PREBUILT_DBG_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../opencv-prebuilt/opencv/build/x64/vc16/bin/opencv_world490d.dll")
-  set(_BUNDLED_DBG_DLL "${_BUNDLED_OPENCV_DIR}/lib/opencv_world490d.dll")
+  set(_PREBUILT_DBG_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../opencv-prebuilt/opencv/build/x64/vc16/bin/opencv_world${_OPENCV_WORLD_VERSION}d.dll")
+  set(_BUNDLED_DBG_DLL "${_BUNDLED_OPENCV_DIR}/lib/opencv_world${_OPENCV_WORLD_VERSION}d.dll")
   if(NOT EXISTS "${_BUNDLED_DBG_DLL}" AND EXISTS "${_PREBUILT_DBG_DLL}")
     message(STATUS "[pp_ocr] Copying debug OpenCV DLL from opencv-prebuilt...")
     file(COPY "${_PREBUILT_DBG_DLL}" DESTINATION "${_BUNDLED_OPENCV_DIR}/lib")
@@ -147,13 +154,18 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 # 将 DLL 与插件打包
 # ==============================================================================
 set(_OPENCV_DLLS "")
-# 同时包含 Debug 和 Release 的 DLL；运行时将选择正确的版本
-foreach(_dll_name opencv_world490.dll opencv_world490d.dll)
-  set(_dll_path "${_BUNDLED_OPENCV_DIR}/lib/${_dll_name}")
-  if(EXISTS "${_dll_path}")
-    list(APPEND _OPENCV_DLLS "${_dll_path}")
-  endif()
-endforeach()
+if(_OPENCV_IS_BUNDLED)
+  # 同时包含 Debug 和 Release 的 DLL；运行时将选择正确的版本。
+  # 仅内嵌 MSVC OpenCV（动态链接）时需要；find_package 提供的
+  # OpenCV（如交叉编译的静态库）已编进插件，无需打包 DLL。
+  foreach(_suffix "" "d")
+    set(_dll_path
+        "${_BUNDLED_OPENCV_DIR}/lib/opencv_world${_OPENCV_WORLD_VERSION}${_suffix}.dll")
+    if(EXISTS "${_dll_path}")
+      list(APPEND _OPENCV_DLLS "${_dll_path}")
+    endif()
+  endforeach()
+endif()
 
 set(pp_ocr_bundled_libraries
   "${ONNXRUNTIME_LIB_DIR}/onnxruntime.dll"
