@@ -5,13 +5,29 @@
 #include <windows.h>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <numeric>
 #include <sstream>
 #include <codecvt>
 #include <locale>
+// SCREENSHOT_CMAKE_PATCHED_V2: C API headers for cvFindContours (STL ABI workaround)
+#include "opencv2/core/core_c.h"
+#include "opencv2/imgproc/imgproc_c.h"
 
 namespace paddle_ocr {
+
+// SCREENSHOT_CMAKE_PATCHED: copy std::vector<cv::Point> into a cv::Mat
+// (1, N, CV_32SC2) so it can be passed to OpenCV via InputArray without
+// crossing the DLL boundary with a Debug-layout vector. cv::Mat's layout
+// is independent of _HAS_ITERATOR_DEBUGGING.
+static cv::Mat _PatchedPointsToMat(const std::vector<cv::Point>& pts) {
+  cv::Mat m(1, static_cast<int>(pts.size()), CV_32SC2);
+  if (!pts.empty()) {
+    std::memcpy(m.data, pts.data(), pts.size() * sizeof(cv::Point));
+  }
+  return m;
+}
 
 // ============================================================================
 // 工具函数：验证并清理 UTF-8 字符串
@@ -129,7 +145,7 @@ static cv::Mat GetRotatedCropImage(const cv::Mat& image,
       cv::Point2f(0, static_cast<float>(crop_h - 1))};
 
   // 透视变换矩阵
-  cv::Mat M = cv::getPerspectiveTransform(src_pts, dst_pts);
+  cv::Mat M = cv::getPerspectiveTransform(src_pts.data(), dst_pts.data()); // SCREENSHOT_CMAKE_PATCHED: pointer overload
   cv::Mat crop_img;
   cv::warpPerspective(image, crop_img, M, cv::Size(crop_w, crop_h),
                       cv::BORDER_REPLICATE);
@@ -179,7 +195,7 @@ std::vector<std::vector<cv::Point>> TextDetector::Detect(
 
   // 将 HWC 格式的 Mat 转换为 NCHW 格式的浮点向量
   std::vector<float> input_data(1 * 3 * input_h * input_w);
-  std::vector<cv::Mat> bgr_channels(3);
+  cv::Mat bgr_channels[3]; // SCREENSHOT_CMAKE_PATCHED: avoid STL ABI mismatch
   cv::split(input_tensor_mat, bgr_channels);
   for (int c = 0; c < 3; ++c) {
     std::memcpy(input_data.data() + c * input_h * input_w,
@@ -288,7 +304,7 @@ cv::Mat TextDetector::Preprocess(const cv::Mat& image, float& ratio_h,
   cv::Mat float_img;
   resized.convertTo(float_img, CV_32FC3, 1.0 / 255.0);
 
-  std::vector<cv::Mat> channels(3);
+  cv::Mat channels[3]; // SCREENSHOT_CMAKE_PATCHED: avoid STL ABI mismatch
   cv::split(float_img, channels);
   // BGR -> RGB 并归一化
   float mean_vals[] = {0.485f, 0.456f, 0.406f};  // R, G, B
@@ -299,7 +315,7 @@ cv::Mat TextDetector::Preprocess(const cv::Mat& image, float& ratio_h,
   channels[0] = (channels[0] - mean_vals[2]) / std_vals[2];  // B
 
   cv::Mat normalized;
-  cv::merge(channels, normalized);
+  cv::merge(channels, 3, normalized); // SCREENSHOT_CMAKE_PATCHED: use pointer overload
   return normalized;
 }
 
@@ -329,9 +345,27 @@ std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
   cv::dilate(mask, dilated, kernel);
 
   // 查找轮廓
+  // SCREENSHOT_CMAKE_PATCHED: use C API cvFindContours (STL ABI workaround)
   std::vector<std::vector<cv::Point>> contours;
-  cv::findContours(dilated, contours, cv::RETR_LIST,
-                   cv::CHAIN_APPROX_SIMPLE);
+  {
+    CvMemStorage* _patched_storage = cvCreateMemStorage(0);
+    CvSeq* _patched_cv_contours = nullptr;
+    CvMat _patched_dilated_c = cvMat(dilated);
+    cvFindContours(&_patched_dilated_c, _patched_storage,
+                   &_patched_cv_contours, sizeof(CvContour),
+                   CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
+    for (CvSeq* _pc = _patched_cv_contours; _pc != nullptr;
+         _pc = _pc->h_next) {
+      std::vector<cv::Point> _patched_contour;
+      _patched_contour.reserve(_pc->total);
+      for (int _pi = 0; _pi < _pc->total; ++_pi) {
+        CvPoint* _ppt = CV_GET_SEQ_ELEM(CvPoint, _pc, _pi);
+        _patched_contour.push_back(cv::Point(_ppt->x, _ppt->y));
+      }
+      contours.push_back(std::move(_patched_contour));
+    }
+    cvReleaseMemStorage(&_patched_storage);
+  }
 
   OCR_LOG("BoxesFromBitmap: found %zu contours", contours.size());
 
@@ -347,7 +381,7 @@ std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
     }
 
     // 获取最小外接矩形
-    cv::RotatedRect rect = cv::minAreaRect(contour);
+    cv::RotatedRect rect = cv::minAreaRect(_PatchedPointsToMat(contour)); // SCREENSHOT_CMAKE_PATCHED: Mat wrapper
     float short_side = std::min(rect.size.width, rect.size.height);
     if (short_side < 3.0f) {
       skipped_size++;
@@ -382,7 +416,7 @@ std::vector<std::vector<cv::Point>> TextDetector::BoxesFromBitmap(
     }
 
     // 从扩展后的多边形获取最终外接矩形
-    cv::RotatedRect final_rect = cv::minAreaRect(unclip_box);
+    cv::RotatedRect final_rect = cv::minAreaRect(_PatchedPointsToMat(unclip_box)); // SCREENSHOT_CMAKE_PATCHED: Mat wrapper
     if (std::min(final_rect.size.width, final_rect.size.height) < 5.0f) {
       OCR_LOG("BoxesFromBitmap: contour[%zu] final too small: %.1fx%.1f",
               ci, final_rect.size.width, final_rect.size.height);
@@ -446,7 +480,11 @@ float TextDetector::BoxScore(const cv::Mat& pred,
   }
 
   cv::Mat mask = cv::Mat::zeros(roi.size(), CV_8UC1);
-  cv::fillPoly(mask, shifted_box, cv::Scalar(1));
+  // SCREENSHOT_CMAKE_PATCHED: use const Point** overload (STL ABI workaround)
+  cv::Point* _patched_poly_pts = shifted_box.data();
+  int _patched_poly_n = static_cast<int>(shifted_box.size());
+  cv::fillPoly(mask, const_cast<const cv::Point**>(&_patched_poly_pts),
+               &_patched_poly_n, 1, cv::Scalar(1));
 
   // 仅计算掩码区域的平均得分
   return static_cast<float>(cv::mean(roi, mask)[0]);
@@ -605,7 +643,11 @@ bool TextRecognizer::LoadDict(const std::string& dict_path) {
   //（如 GBK）解释路径，UTF-8 编码的中文路径会打开失败。
   // 因此先转为宽字符路径，使用 MSVC 的 wchar_t 构造重载。
   std::wstring wide_dict_path = ToWString(dict_path);
-  std::ifstream file(wide_dict_path, std::ios::in | std::ios::binary);
+  // 注意：std::ifstream(std::wstring) 是 MSVC 私有扩展（llvm-mingw 的
+  // libc++ 没有该重载）；std::filesystem::path 是 C++17 标准构造，
+  // MSVC / libc++ 均支持，且在 Windows 上原生走宽字符 API（中文路径 OK）。
+  std::ifstream file(std::filesystem::path(wide_dict_path),
+                     std::ios::in | std::ios::binary);
   if (!file.is_open()) {
     OCR_LOG("LoadDict: FAILED to open file: %s", dict_path.c_str());
     fprintf(stderr, "Failed to open dict file: %s\n", dict_path.c_str());
@@ -721,7 +763,7 @@ std::vector<std::pair<std::string, float>> TextRecognizer::Recognize(
 
     // 转换为 NCHW 浮点张量
     std::vector<float> input_data(1 * 3 * crop_h * crop_w);
-    std::vector<cv::Mat> channels(3);
+    cv::Mat channels[3]; // SCREENSHOT_CMAKE_PATCHED: avoid STL ABI mismatch
     cv::split(crop, channels);
     for (int c = 0; c < 3; ++c) {
       std::memcpy(input_data.data() + c * crop_h * crop_w,
@@ -1001,7 +1043,10 @@ std::vector<OcrBoxResult> OcrEngine::Recognize(const cv::Mat& image) {
 std::vector<OcrBoxResult> OcrEngine::RecognizeFromBytes(
     const std::vector<uint8_t>& image_bytes) {
   OCR_LOG("RecognizeFromBytes: input %zu bytes", image_bytes.size());
-  cv::Mat image = cv::imdecode(image_bytes, cv::IMREAD_COLOR);
+  // SCREENSHOT_CMAKE_PATCHED: copy buffer into cv::Mat (STL ABI workaround)
+  cv::Mat buf_mat(1, static_cast<int>(image_bytes.size()), CV_8UC1);
+  memcpy(buf_mat.data, image_bytes.data(), image_bytes.size());
+  cv::Mat image = cv::imdecode(buf_mat, cv::IMREAD_COLOR);
   if (image.empty()) {
     OCR_LOG("RecognizeFromBytes: cv::imdecode failed - image is empty");
     return {};
@@ -1031,7 +1076,8 @@ std::vector<OcrBoxResult> OcrEngine::RecognizeFromFile(
   // ANSI 代码页路径。非 ASCII 路径（如中文）会静默失败。
   // 解决方案：通过宽字符 ifstream 读取文件字节，然后用 cv::imdecode 解码。
   std::wstring wide_path = ToWString(image_path);
-  std::ifstream file(wide_path, std::ios::binary | std::ios::ate);
+  std::ifstream file(std::filesystem::path(wide_path),
+                     std::ios::binary | std::ios::ate);
   if (!file.is_open()) {
     OCR_LOG("RecognizeFromFile: failed to open file (wide path), errno=%d", errno);
     // 回退：直接尝试 cv::imread（适用于 ASCII 路径）
@@ -1058,7 +1104,10 @@ std::vector<OcrBoxResult> OcrEngine::RecognizeFromFile(
   }
   file.close();
 
-  cv::Mat image = cv::imdecode(buffer, cv::IMREAD_COLOR);
+  // SCREENSHOT_CMAKE_PATCHED: copy buffer into cv::Mat (STL ABI workaround)
+  cv::Mat buf_mat(1, static_cast<int>(buffer.size()), CV_8UC1);
+  memcpy(buf_mat.data, buffer.data(), buffer.size());
+  cv::Mat image = cv::imdecode(buf_mat, cv::IMREAD_COLOR);
   if (image.empty()) {
     OCR_LOG("RecognizeFromFile: cv::imdecode failed - image is empty "
             "(file may be corrupted or unsupported format)");
