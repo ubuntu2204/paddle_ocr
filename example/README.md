@@ -28,13 +28,15 @@ model/
 
 模型文件可以从 [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) 官方仓库获取，并使用 [Paddle2ONNX](https://github.com/PaddlePaddle/Paddle2ONNX) 工具转换为 ONNX 格式。
 
-示例应用启动后，默认会在界面顶部的模型配置栏中填写以下路径：
+示例应用启动后，会按以下顺序自动探测模型目录，并将命中的绝对路径填入界面顶部的模型配置栏：
 
-- `C:\project\paddle_ocr\model\det.onnx`
-- `C:\project\paddle_ocr\model\inference.onnx`
-- `C:\project\paddle_ocr\model\ppocr_v6_dict.txt`
+1. **可执行文件同级的 `model/`**（部署形态）——例如应用部署在 `C:\flutter_build\pp_ocr_example\` 时，默认路径为：
+   - `C:\flutter_build\pp_ocr_example\model\det.onnx`
+   - `C:\flutter_build\pp_ocr_example\model\inference.onnx`
+   - `C:\flutter_build\pp_ocr_example\model\ppocr_v6_dict.txt`
+2. **项目根目录下的 `model/`**（`flutter run` 开发形态，工作目录为 `example/`，自动回退到上一级）。
 
-如果你的模型文件位于其他位置，请在界面中手动修改对应的路径。
+因此，将编译产物拷贝到其他机器运行时，只需把 `model/` 文件夹放到 exe 同级目录下即可被自动识别。如果你的模型文件位于其他位置，请在界面中手动修改对应的路径。
 
 ## 运行示例
 

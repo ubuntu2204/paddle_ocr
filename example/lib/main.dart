@@ -55,11 +55,20 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
 
   /// 解析模型文件的绝对路径。
   ///
-  /// model 文件夹位于项目根目录（example 的上一级）。
-  /// `flutter run` 时工作目录为 example/，因此通过 `../model` 解析。
+  /// 按以下顺序探测，命中即用：
+  /// 1. 可执行文件同级的 `model/`（部署形态，如
+  ///    `C:\flutter_build\pp_ocr_example\model\det.onnx`）；
+  /// 2. 工作目录上一级的 `model/`（`flutter run` 开发形态，工作目录为
+  ///    example/，模型位于项目根）；
+  /// 3. 都未命中时返回部署形态路径作为默认值（可在界面修改）。
   static String _modelPath(String name) {
-    final modelDir = Directory('${Directory.current.path}/../model');
-    return File('${modelDir.absolute.path}/$name').absolute.path;
+    final sep = Platform.isWindows ? r'\' : '/';
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final besideExe = File('$exeDir${sep}model$sep$name');
+    if (besideExe.existsSync()) return besideExe.absolute.path;
+    final dev = File('${Directory.current.path}${sep}..${sep}model$sep$name');
+    if (dev.existsSync()) return dev.absolute.path;
+    return besideExe.absolute.path;
   }
 
   // OCR 引擎是否已初始化
