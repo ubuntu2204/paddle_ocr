@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 import 'dart:developer' as developer;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:pp_ocr/pp_ocr.dart';
 
 /// 应用程序入口函数
@@ -20,7 +20,6 @@ class OcrExampleApp extends StatelessWidget {
       title: 'PP-OCRv6 Demo',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
       ),
       home: const OcrDemoPage(),
     );
