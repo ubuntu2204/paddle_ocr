@@ -43,6 +43,24 @@ A Flutter plugin for offline OCR (Optical Character Recognition) on Windows and 
   and `lib/` under `linux/third_party/onnxruntime/`, or pass
   `-DONNXRUNTIME_ROOT=<path>` via your `example/linux/CMakeLists.txt`.
 
+### One-shot ONNX Runtime fetch (for networks that cannot reach GitHub)
+
+If `github.com` times out (common in mainland China), this repo ships
+`tool/setup_linux_deps.sh`. It downloads the equivalent `onnxruntime` wheel
+from a PyPI mirror, extracts `libonnxruntime.so.<ver>` into
+`linux/third_party/onnxruntime/`, and creates the `libonnxruntime.so` /
+`libonnxruntime.so.1` SONAME symlinks the linker requires.
+
+```bash
+bash tool/setup_linux_deps.sh          # defaults to ORT 1.20.1
+ORT_VERSION=1.17.0 bash tool/setup_linux_deps.sh
+```
+
+Then simply:
+```bash
+cd example && flutter run -d linux
+```
+
 > **Note:** ONNX Runtime 1.20.1 and OpenCV 4.9.0 are **bundled** with this plugin
 > (`windows/third_party/`). No download or manual setup is required.
 >

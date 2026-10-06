@@ -151,6 +151,7 @@ inline std::string ValidateUtf8Detailed(const std::string& input) {
     i += seq_len;
     char_count++;
   }
+  (void)char_count;  // 仅用于调试断点计数，避免 -Wunused-but-set-variable
   return "";  // 验证通过，返回空字符串
 }
 

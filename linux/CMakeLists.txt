@@ -142,6 +142,27 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   ${OpenCV_LIBS}
 )
 
+# 向下游（example/runner）传递 linker 搜索路径：因为 libpp_ocr_plugin.so 的
+# DT_NEEDED 中会包含 libonnxruntime.so.1（来自 SONAME），链接 runner 时 ld
+# 需要能找到该文件，否则报 "needed by ..., not found"。使用 -rpath-link 仅
+# 参导搜索，不会污染产物 RPATH。
+get_filename_component(_ort_link_dir "${ONNXRUNTIME_LINK_TARGET}" DIRECTORY)
+if(_ort_link_dir AND NOT _ort_link_dir STREQUAL "")
+  target_link_options(${PLUGIN_NAME} INTERFACE "LINKER:-rpath-link,${_ort_link_dir}")
+endif()
+
+# 同理处理 OpenCV 库目录（通常位于 /usr/lib/x86_64-linux-gnu，系统链接器
+# 默认会搜索；但 bundled 方式时需要提醒链接器）。
+if(OpenCV_LIBS)
+  list(GET OpenCV_LIBS 0 _opencv_first_lib)
+  if(_opencv_first_lib MATCHES "\.so")
+    get_filename_component(_opencv_link_dir "${_opencv_first_lib}" DIRECTORY)
+    if(EXISTS "${_opencv_link_dir}")
+      target_link_options(${PLUGIN_NAME} INTERFACE "LINKER:-rpath-link,${_opencv_link_dir}")
+    endif()
+  endif()
+endif()
+
 # 让生成的 .so 在运行时通过 $ORIGIN 查找同目录下的依赖（若随插件打包）
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   INSTALL_RPATH "$ORIGIN;$ORIGIN/lib"
@@ -151,27 +172,38 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES
 # 随插件打包的动态库
 # ==============================================================================
 # 若使用系统安装（apt），留空即可；Flutter 工具链会自动通过 $ORIGIN 定位。
-# 若使用 bundled 或 ONNXRUNTIME_ROOT，请把对应的 .so 加入下列列表以便拷贝到
-# 应用产物目录。
-set(pp_ocr_bundled_libraries
-  ""
-  PARENT_SCOPE
-)
+# 若使用 bundled 或 ONNXRUNTIME_ROOT，则把对应的 .so 拷贝到应用产物目录，
+# 目标运行时同样通过 $ORIGIN 定位。
+set(pp_ocr_bundled_libraries "")
 
-if(ONNXRUNTIME_LIB_DIR AND EXISTS "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so")
-  list(APPEND pp_ocr_bundled_libraries "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so")
+# 内置（linux/third_party）或自定义 ONNXRUNTIME_ROOT 时都需拷贝 .so；
+# glob 匹配 libonnxruntime.so* 以同时包含带版本号的主库、无后缀的
+# 开发链接名以及 provider 插件。
+if(DEFINED ONNXRUNTIME_LIB_DIR AND EXISTS "${ONNXRUNTIME_LIB_DIR}")
+  file(GLOB _ort_bundled "${ONNXRUNTIME_LIB_DIR}/libonnxruntime*.so*")
+  list(APPEND pp_ocr_bundled_libraries ${_ort_bundled})
 endif()
+
 if(DEFINED _BUNDLED_OPENCV_DIR AND EXISTS "${_BUNDLED_OPENCV_DIR}/lib")
   file(GLOB _bundled_opencv_so "${_BUNDLED_OPENCV_DIR}/lib/libopencv_*.so*")
   list(APPEND pp_ocr_bundled_libraries ${_bundled_opencv_so})
 endif()
+
+list(REMOVE_DUPLICATES pp_ocr_bundled_libraries)
 set(pp_ocr_bundled_libraries ${pp_ocr_bundled_libraries} PARENT_SCOPE)
 
 # ==============================================================================
 # 测试（可选；当前未提供 Linux 单元测试，保留目录结构同与 Windows 对齐）
 # ==============================================================================
-if (DEFINED include_${PROJECT_NAME}_tests AND ${include_${PROJECT_NAME}_tests}
-    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/paddle_ocr_plugin_test.cc")
+# 先安全地把开关展开到一个局部变量，避免 include_${PROJECT_NAME}_tests 未定义
+# 时 if() 因空参数而语法错误。
+if(DEFINED include_${PROJECT_NAME}_tests)
+  set(_pp_ocr_tests_enabled ${include_${PROJECT_NAME}_tests})
+else()
+  set(_pp_ocr_tests_enabled OFF)
+endif()
+
+if(_pp_ocr_tests_enabled AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/paddle_ocr_plugin_test.cc")
   set(TEST_RUNNER "${PROJECT_NAME}_test")
   enable_testing()
 

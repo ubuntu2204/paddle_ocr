@@ -52,4 +52,8 @@
 * `pubspec.yaml` 新增 `linux: pluginClass: PaddleOcrPlugin, ffiPlugin: true`
 * Dart FFI 绑定支持 Linux，自动以 `DynamicLibrary.open('libpp_ocr_plugin.so')` 加载
 * example 目录新增 `example/linux/` 脚手架（通过 `flutter create --platforms=linux` 生成）
+* 新增 `tool/setup_linux_deps.sh`：当 GitHub Release 不可达时，从 PyPI 镜像自动拉取 `onnxruntime` wheel 并展开为 `linux/third_party/onnxruntime/{include,lib}`，自动建立 `libonnxruntime.so`、`libonnxruntime.so.1` SONAME 链接
+* 修复 Linux 端实际接入时发现的 API 误用：`FlMethodMessenger` → `FlBinaryMessenger`；`fl_value_new_double` → `fl_value_new_float`；使用 `fl_value_set_string_take` 避免堆分配 key
+* 插件 Linux 产物链接时自动向下游传递 `-rpath-link`，避免链接 runner 时报 `libonnxruntime.so.1 not found`
+* `debug_utils.h` 里 `char_count` 增加 `(void)` 显式使用，修复 Linux 下 `-Werror=unused-but-set-variable`
 

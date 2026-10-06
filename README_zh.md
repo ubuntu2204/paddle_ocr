@@ -43,6 +43,22 @@
   `-DONNXRUNTIME_ROOT=<path>` 传递（写入 `example/linux/CMakeLists.txt`
   或 `flutter build linux --config=cmake_args=...`）。
 
+### 一键拉取 ONNX Runtime（适合无法直连 GitHub 的网络）
+
+GitHub Release 在国内容易超时，本仓库提供 `tool/setup_linux_deps.sh`：
+它从 pip 镜像拉 `onnxruntime==<ver>.whl`（内部同样包含 Linux 的
+`libonnxruntime.so.<ver>`），拷贝到 `linux/third_party/onnxruntime/`。
+
+```bash
+bash tool/setup_linux_deps.sh          # 默认 ORT 1.20.1
+ORT_VERSION=1.17.0 bash tool/setup_linux_deps.sh
+```
+
+完成后直接：
+```bash
+cd example && flutter run -d linux
+```
+
 > **注意：** ONNX Runtime 1.20.1 和 OpenCV 4.9.0 已**内置**在本插件中
 > （`windows/third_party/`），无需下载或手动配置。
 >

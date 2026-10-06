@@ -36,6 +36,8 @@ std::string GetArgString(FlValue* args, const char* key) {
 
 // 将 OcrBoxResult 列表编码为 FlValue 列表（每项是 { box, text, confidence }）。
 // 返回的 FlValue 由调用方负责释放（g_autoptr）。
+// 注意：Flutter Linux 的 FlValue API 使用 fl_value_new_float 表示 double，
+// 并使用 fl_value_set_string_take 避免堆分配 key。
 FlValue* ResultsToFlValue(
     const std::vector<paddle_ocr::OcrBoxResult>& results) {
   FlValue* arr = fl_value_new_list();
@@ -46,18 +48,19 @@ FlValue* ResultsToFlValue(
     for (const auto& pt : r.box) {
       FlValue* pt_list = fl_value_new_list();
       fl_value_append_take(pt_list,
-                           fl_value_new_double(static_cast<double>(pt.x)));
+                           fl_value_new_float(static_cast<double>(pt.x)));
       fl_value_append_take(pt_list,
-                           fl_value_new_double(static_cast<double>(pt.y)));
+                           fl_value_new_float(static_cast<double>(pt.y)));
       fl_value_append_take(box_list, pt_list);
     }
-    fl_value_set_take(entry_map, fl_value_new_string("box"), box_list);
+    fl_value_set_string_take(entry_map, "box", box_list);
 
-    fl_value_set_take(entry_map, fl_value_new_string("text"),
-                      fl_value_new_string(r.text.c_str()));
+    fl_value_set_string_take(entry_map, "text",
+                             fl_value_new_string(r.text.c_str()));
 
-    fl_value_set_take(entry_map, fl_value_new_string("confidence"),
-                      fl_value_new_double(static_cast<double>(r.confidence)));
+    fl_value_set_string_take(entry_map, "confidence",
+                             fl_value_new_float(
+                                 static_cast<double>(r.confidence)));
 
     fl_value_append_take(arr, entry_map);
   }
@@ -234,7 +237,7 @@ void DestroyState(gpointer data) {
 // ---------------------------------------------------------------------------
 extern "C" FLUTTER_PLUGIN_EXPORT void paddle_ocr_plugin_register_with_registrar(
     FlPluginRegistrar* registrar) {
-  FlMethodMessenger* messenger =
+  FlBinaryMessenger* messenger =
       fl_plugin_registrar_get_messenger(registrar);
   FlView* view = fl_plugin_registrar_get_view(registrar);
 
