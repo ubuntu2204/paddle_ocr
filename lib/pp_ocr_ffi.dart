@@ -11,9 +11,9 @@ import 'src/pp_ocr_ffi_bindings.dart';
 
 /// [PaddleOcrPlatform] 的 FFI 实现。
 ///
-/// 这是 Windows 平台的默认实现。它通过 dart:ffi 直接与原生 C++ 库通信，
-/// 避免了 MethodChannel 的开销。当 FFI 不可用时（例如找不到 DLL），
-/// 会自动回退到 [MethodChannelPaddleOcr]。
+/// 这是 Windows / Linux 平台的默认实现。它通过 dart:ffi 直接与原生 C++
+/// 库通信，避免了 MethodChannel 的开销。当 FFI 不可用时（例如找不到
+/// DLL / so），会自动回退到 [MethodChannelPaddleOcr]。
 class FfiPaddleOcr extends PaddleOcrPlatform {
   FfiPaddleOcr();
 
@@ -65,7 +65,12 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
 
     final engine = _engine!;
     final bindings = PpOcrFfiBindings.instance;
-    final ok = bindings.initialize(engine, detModelPath, recModelPath, dictPath);
+    final ok = bindings.initialize(
+      engine,
+      detModelPath,
+      recModelPath,
+      dictPath,
+    );
     if (!ok) {
       final err = bindings.getLastError(engine);
       // ignore: avoid_print
@@ -127,7 +132,8 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
 
   @override
   Future<String?> pickImage() async {
-    // pickImage 使用 Windows 原生文件对话框 —— 仅限 MethodChannel。
+    // pickImage 使用原生文件对话框（Windows: GetOpenFileNameW；
+    // Linux: GtkFileChooserDialog），仅限 MethodChannel。
     return _methodChannel.pickImage();
   }
 
@@ -164,11 +170,7 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
         text = item.text.toDartString();
       }
 
-      results.add(OcrResult(
-        box: box,
-        text: text,
-        confidence: item.confidence,
-      ));
+      results.add(OcrResult(box: box, text: text, confidence: item.confidence));
     }
     return results;
   }

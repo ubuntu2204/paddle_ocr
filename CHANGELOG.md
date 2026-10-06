@@ -41,3 +41,15 @@
 * 修复 llvm-mingw (libc++) 编译失败：`std::ifstream` 无 `std::wstring` 重载，改用 `std::filesystem::path` 构造宽路径（C++17 标准，MSVC/libc++ 双兼容，中文路径语义不变）
 * `analysis_options.yaml` 排除 `build/` 与 `windows/` 目录的分析器检查
 
+## 0.3.0
+
+* **新增 Linux 支持**
+* 插件与 example 均可在 Linux 桌面（Ubuntu 22.04+ 等基于 glibc 的发行版）构建和运行
+* 将 `ocr_engine.*`、`pp_ocr_ffi.*`、`debug_utils.h` 从 `windows/` 提升为 `cpp/` 共享目录，Windows/Linux 共用
+* Windows 相关的宽字符路径 / ORT 会话代码均使用 `#ifdef _WIN32` 守卫；POSIX 下直接以 UTF-8 字节处理文件路径
+* 新增 `linux/paddle_ocr_plugin.cc`：基于 `FlMethodChannel` 实现 `initialize`/`recognizeImage`/`recognizeImageBytes`/`pickImage`/`getPlatformVersion`；`pickImage` 使用 `GtkFileChooserDialog`
+* 新增 `linux/CMakeLists.txt`：默认使用系统安装的 OpenCV（`apt install libopencv-dev`）与 ONNX Runtime；支持 `-DONNXRUNTIME_ROOT=<path>` 或 `linux/third_party/onnxruntime/` 内置方式
+* `pubspec.yaml` 新增 `linux: pluginClass: PaddleOcrPlugin, ffiPlugin: true`
+* Dart FFI 绑定支持 Linux，自动以 `DynamicLibrary.open('libpp_ocr_plugin.so')` 加载
+* example 目录新增 `example/linux/` 脚手架（通过 `flutter create --platforms=linux` 生成）
+

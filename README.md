@@ -2,7 +2,7 @@
 
 English | [简体中文](README_zh.md)
 
-A Flutter plugin for offline OCR (Optical Character Recognition) on Windows, powered by PaddleOCR's PP-OCRv6 models and ONNX Runtime.
+A Flutter plugin for offline OCR (Optical Character Recognition) on Windows and Linux, powered by PaddleOCR's PP-OCRv6 models and ONNX Runtime.
 
 ## Features
 
@@ -19,16 +19,29 @@ A Flutter plugin for offline OCR (Optical Character Recognition) on Windows, pow
 | Platform | Support |
 |----------|---------|
 | Windows  | ✅       |
+| Linux    | ✅       |
 | Android  | ❌       |
 | iOS      | ❌       |
 | macOS    | ❌       |
-| Linux    | ❌       |
 
 ## Requirements
 
+**Windows:**
 - Flutter >= 3.0.0
 - Windows 10 or later
 - Visual Studio 2022 with CMake support
+
+**Linux:**
+- Flutter >= 3.0.0
+- GTK 3 development headers: `sudo apt install libgtk-3-dev`
+- CMake / clang toolchain: `sudo apt install cmake clang ninja-build`
+- OpenCV development package: `sudo apt install libopencv-dev` (4.x recommended)
+- ONNX Runtime: no official apt package on Ubuntu. Download the prebuilt
+  tarball from [Microsoft's GitHub
+  Releases](https://github.com/microsoft/onnxruntime/releases)
+  (`onnxruntime-linux-x64-<ver>.tgz`), then either place its `include/`
+  and `lib/` under `linux/third_party/onnxruntime/`, or pass
+  `-DONNXRUNTIME_ROOT=<path>` via your `example/linux/CMakeLists.txt`.
 
 > **Note:** ONNX Runtime 1.20.1 and OpenCV 4.9.0 are **bundled** with this plugin
 > (`windows/third_party/`). No download or manual setup is required.

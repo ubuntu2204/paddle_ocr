@@ -46,14 +46,14 @@ final class PpOcrResultArrayC extends Struct {
 
 typedef _CreateNative = Pointer<Void> Function();
 typedef _DestroyNative = Void Function(Pointer<Void>);
-typedef _InitializeNative = Int32 Function(
-    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _InitializeNative =
+    Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _IsInitializedNative = Int32 Function(Pointer<Void>);
 typedef _GetLastErrorNative = Pointer<Utf8> Function(Pointer<Void>);
-typedef _RecognizeFileNative = PpOcrResultArrayC Function(
-    Pointer<Void>, Pointer<Utf8>);
-typedef _RecognizeBytesNative = PpOcrResultArrayC Function(
-    Pointer<Void>, Pointer<Uint8>, Int32);
+typedef _RecognizeFileNative =
+    PpOcrResultArrayC Function(Pointer<Void>, Pointer<Utf8>);
+typedef _RecognizeBytesNative =
+    PpOcrResultArrayC Function(Pointer<Void>, Pointer<Uint8>, Int32);
 typedef _VersionNative = Pointer<Utf8> Function();
 
 // ---------------------------------------------------------------------------
@@ -62,14 +62,14 @@ typedef _VersionNative = Pointer<Utf8> Function();
 
 typedef _CreateDart = Pointer<Void> Function();
 typedef _DestroyDart = void Function(Pointer<Void>);
-typedef _InitializeDart = int Function(
-    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _InitializeDart =
+    int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _IsInitializedDart = int Function(Pointer<Void>);
 typedef _GetLastErrorDart = Pointer<Utf8> Function(Pointer<Void>);
-typedef _RecognizeFileDart = PpOcrResultArrayC Function(
-    Pointer<Void>, Pointer<Utf8>);
-typedef _RecognizeBytesDart = PpOcrResultArrayC Function(
-    Pointer<Void>, Pointer<Uint8>, int);
+typedef _RecognizeFileDart =
+    PpOcrResultArrayC Function(Pointer<Void>, Pointer<Utf8>);
+typedef _RecognizeBytesDart =
+    PpOcrResultArrayC Function(Pointer<Void>, Pointer<Uint8>, int);
 typedef _VersionDart = Pointer<Utf8> Function();
 
 // ---------------------------------------------------------------------------
@@ -77,6 +77,8 @@ typedef _VersionDart = Pointer<Utf8> Function();
 // ---------------------------------------------------------------------------
 
 /// pp_ocr 原生库的底层 FFI 绑定。
+///
+/// 支持 Windows 与 Linux；macOS 目前回退至 MethodChannel。
 class PpOcrFfiBindings {
   PpOcrFfiBindings._(this._dylib);
 
@@ -94,35 +96,49 @@ class PpOcrFfiBindings {
 
   /// 加载原生动态库。
   ///
-  /// 目前仅支持 Windows 平台。
+  /// 支持 Windows（pp_ocr_plugin.dll）和 Linux（libpp_ocr_plugin.so）。
+  /// macOS/Android/iOS 目前尚未实现。
   static DynamicLibrary _loadLibrary() {
     if (Platform.isWindows) {
       return DynamicLibrary.open('pp_ocr_plugin.dll');
     }
-    throw UnsupportedError('pp_ocr FFI only supports Windows');
+    if (Platform.isLinux) {
+      // Flutter Linux 插件产物名由 linux/CMakeLists.txt 的 PLUGIN_NAME
+      // 决定（pp_ocr_plugin），默认共享库文件名为 libpp_ocr_plugin.so。
+      // 应用发布后与可执行文件同层交付，通过 $ORIGIN RPATH 定位，
+      // 因此直接以文件名 open 即可。
+      return DynamicLibrary.open('libpp_ocr_plugin.so');
+    }
+    throw UnsupportedError('pp_ocr FFI only supports Windows and Linux');
   }
 
-  late final _create =
-      _dylib.lookupFunction<_CreateNative, _CreateDart>('pp_ocr_create');
-  late final _destroy =
-      _dylib.lookupFunction<_DestroyNative, _DestroyDart>('pp_ocr_destroy');
-  late final _initialize =
-      _dylib.lookupFunction<_InitializeNative, _InitializeDart>(
-          'pp_ocr_initialize');
-  late final _isInitialized =
-      _dylib.lookupFunction<_IsInitializedNative, _IsInitializedDart>(
-          'pp_ocr_is_initialized');
-  late final _getLastError =
-      _dylib.lookupFunction<_GetLastErrorNative, _GetLastErrorDart>(
-          'pp_ocr_get_last_error');
-  late final _recognizeFile =
-      _dylib.lookupFunction<_RecognizeFileNative, _RecognizeFileDart>(
-          'pp_ocr_recognize_file');
-  late final _recognizeBytes =
-      _dylib.lookupFunction<_RecognizeBytesNative, _RecognizeBytesDart>(
-          'pp_ocr_recognize_bytes');
-  late final _version =
-      _dylib.lookupFunction<_VersionNative, _VersionDart>('pp_ocr_version');
+  late final _create = _dylib.lookupFunction<_CreateNative, _CreateDart>(
+    'pp_ocr_create',
+  );
+  late final _destroy = _dylib.lookupFunction<_DestroyNative, _DestroyDart>(
+    'pp_ocr_destroy',
+  );
+  late final _initialize = _dylib
+      .lookupFunction<_InitializeNative, _InitializeDart>('pp_ocr_initialize');
+  late final _isInitialized = _dylib
+      .lookupFunction<_IsInitializedNative, _IsInitializedDart>(
+        'pp_ocr_is_initialized',
+      );
+  late final _getLastError = _dylib
+      .lookupFunction<_GetLastErrorNative, _GetLastErrorDart>(
+        'pp_ocr_get_last_error',
+      );
+  late final _recognizeFile = _dylib
+      .lookupFunction<_RecognizeFileNative, _RecognizeFileDart>(
+        'pp_ocr_recognize_file',
+      );
+  late final _recognizeBytes = _dylib
+      .lookupFunction<_RecognizeBytesNative, _RecognizeBytesDart>(
+        'pp_ocr_recognize_bytes',
+      );
+  late final _version = _dylib.lookupFunction<_VersionNative, _VersionDart>(
+    'pp_ocr_version',
+  );
 
   /// 创建新的 OCR 引擎实例。
   Pointer<Void> create() => _create();
@@ -131,8 +147,12 @@ class PpOcrFfiBindings {
   void destroy(Pointer<Void> engine) => _destroy(engine);
 
   /// 使用模型路径初始化引擎。
-  bool initialize(Pointer<Void> engine, String detPath, String recPath,
-      String dictPath) {
+  bool initialize(
+    Pointer<Void> engine,
+    String detPath,
+    String recPath,
+    String dictPath,
+  ) {
     final detPtr = detPath.toNativeUtf8();
     final recPtr = recPath.toNativeUtf8();
     final dictPtr = dictPath.toNativeUtf8();
@@ -146,8 +166,7 @@ class PpOcrFfiBindings {
   }
 
   /// 检查引擎是否已初始化。
-  bool isInitialized(Pointer<Void> engine) =>
-      _isInitialized(engine) != 0;
+  bool isInitialized(Pointer<Void> engine) => _isInitialized(engine) != 0;
 
   /// 获取最近一次的错误信息。
   String? getLastError(Pointer<Void> engine) {
@@ -173,8 +192,7 @@ class PpOcrFfiBindings {
   }
 
   /// 从图片字节数据识别文字。
-  PpOcrResultArrayC recognizeBytes(
-      Pointer<Void> engine, Uint8List bytes) {
+  PpOcrResultArrayC recognizeBytes(Pointer<Void> engine, Uint8List bytes) {
     final ptr = calloc<Uint8>(bytes.length);
     try {
       ptr.asTypedList(bytes.length).setAll(0, bytes);

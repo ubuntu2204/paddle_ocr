@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-一个基于 PaddleOCR PP-OCRv6 模型和 ONNX Runtime 的 Windows 离线 OCR（光学字符识别）Flutter 插件。
+一个基于 PaddleOCR PP-OCRv6 模型和 ONNX Runtime 的 Windows/Linux 离线 OCR（光学字符识别）Flutter 插件。
 
 ## 功能特性
 
@@ -19,16 +19,29 @@
 | 平台    | 支持   |
 |---------|--------|
 | Windows | ✅      |
+| Linux   | ✅      |
 | Android | ❌      |
 | iOS     | ❌      |
 | macOS   | ❌      |
-| Linux   | ❌      |
 
 ## 环境要求
 
+**Windows：**
 - Flutter >= 3.0.0
 - Windows 10 及以上
 - Visual Studio 2022（含 CMake 支持）
+
+**Linux：**
+- Flutter >= 3.0.0
+- GTK 3 开发头文件：`sudo apt install libgtk-3-dev`
+- CMake、clang 工具链（`sudo apt install cmake clang ninja-build`）
+- OpenCV 开发包：`sudo apt install libopencv-dev`（建议 4.x）
+- ONNX Runtime：Ubuntu 上无官方 apt 包，推荐从 [Microsoft
+  GitHub Release](https://github.com/microsoft/onnxruntime/releases)
+  下载 `onnxruntime-linux-x64-<ver>.tgz`，解压后将 `include/` 与
+  `lib/` 放到 `linux/third_party/onnxruntime/`，或通过
+  `-DONNXRUNTIME_ROOT=<path>` 传递（写入 `example/linux/CMakeLists.txt`
+  或 `flutter build linux --config=cmake_args=...`）。
 
 > **注意：** ONNX Runtime 1.20.1 和 OpenCV 4.9.0 已**内置**在本插件中
 > （`windows/third_party/`），无需下载或手动配置。

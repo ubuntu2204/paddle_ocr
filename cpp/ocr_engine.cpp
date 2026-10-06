@@ -1,19 +1,28 @@
 #include "ocr_engine.h"
 #include "debug_utils.h"
 
+#ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <numeric>
 #include <sstream>
+#ifdef _WIN32
 #include <codecvt>
 #include <locale>
-// SCREENSHOT_CMAKE_PATCHED_V2: C API headers for cvFindContours (STL ABI workaround)
+#endif
+// SCREENSHOT_CMAKE_PATCHED_V2: C API headers for cvFindContours (STL ABI workaround on Windows)
 #include "opencv2/core/core_c.h"
 #include "opencv2/imgproc/imgproc_c.h"
+
+#ifndef _WIN32
+#include <cerrno>
+#endif
 
 namespace paddle_ocr {
 
@@ -72,8 +81,10 @@ static std::string SanitizeUtf8(const std::string& input) {
   return result;
 }
 
+#ifdef _WIN32
 // ============================================================================
 // 工具函数：将 std::string (UTF-8) 转换为 std::wstring (宽字符，用于 Windows API/ORT)
+// Linux 上 ORT 与 std::ifstream 直接接受 UTF-8 char* 路径，无需此转换。
 // ============================================================================
 static std::wstring ToWString(const std::string& s) {
   if (s.empty()) return L"";
@@ -82,6 +93,7 @@ static std::wstring ToWString(const std::string& s) {
   MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &ws[0], len);
   return ws;
 }
+#endif
 
 // ============================================================================
 // 工具函数：GetRotatedCropImage - 通过四点多边形裁剪文本区域
@@ -167,9 +179,14 @@ bool TextDetector::Initialize(const std::string& model_path) {
   session_options.SetGraphOptimizationLevel(
       GraphOptimizationLevel::ORT_ENABLE_ALL);
 
+#ifdef _WIN32
   std::wstring wide_path = ToWString(model_path);
   // 让 Ort::Exception 向上传播，以便 OcrEngine 捕获错误信息
   session_ = Ort::Session(env_, wide_path.c_str(), session_options);
+#else
+  // Linux / macOS：ORT 接受 UTF-8 char* 路径
+  session_ = Ort::Session(env_, model_path.c_str(), session_options);
+#endif
   Ort::AllocatorWithDefaultOptions alloc;
   auto in_name = session_.GetInputNameAllocated(0, alloc);
   auto out_name = session_.GetOutputNameAllocated(0, alloc);
@@ -619,9 +636,13 @@ bool TextRecognizer::Initialize(const std::string& model_path,
   session_options.SetGraphOptimizationLevel(
       GraphOptimizationLevel::ORT_ENABLE_ALL);
 
+#ifdef _WIN32
   std::wstring wide_path = ToWString(model_path);
   // 让 Ort::Exception 向上传播，以便 OcrEngine 捕获错误信息
   session_ = Ort::Session(env_, wide_path.c_str(), session_options);
+#else
+  session_ = Ort::Session(env_, model_path.c_str(), session_options);
+#endif
   Ort::AllocatorWithDefaultOptions alloc;
   auto in_name = session_.GetInputNameAllocated(0, alloc);
   auto out_name = session_.GetOutputNameAllocated(0, alloc);
@@ -642,12 +663,18 @@ bool TextRecognizer::LoadDict(const std::string& dict_path) {
   // 注意：Windows 上 std::ifstream 的 char* 构造函数按系统 ANSI 代码页
   //（如 GBK）解释路径，UTF-8 编码的中文路径会打开失败。
   // 因此先转为宽字符路径，使用 MSVC 的 wchar_t 构造重载。
+#ifdef _WIN32
   std::wstring wide_dict_path = ToWString(dict_path);
   // 注意：std::ifstream(std::wstring) 是 MSVC 私有扩展（llvm-mingw 的
   // libc++ 没有该重载）；std::filesystem::path 是 C++17 标准构造，
   // MSVC / libc++ 均支持，且在 Windows 上原生走宽字符 API（中文路径 OK）。
   std::ifstream file(std::filesystem::path(wide_dict_path),
                      std::ios::in | std::ios::binary);
+#else
+  // POSIX：文件系统原生使用 UTF-8 字节序列，直接构造即可。
+  std::ifstream file(std::filesystem::path(dict_path),
+                     std::ios::in | std::ios::binary);
+#endif
   if (!file.is_open()) {
     OCR_LOG("LoadDict: FAILED to open file: %s", dict_path.c_str());
     fprintf(stderr, "Failed to open dict file: %s\n", dict_path.c_str());
@@ -1072,6 +1099,7 @@ std::vector<OcrBoxResult> OcrEngine::RecognizeFromFile(
     OCR_LOG("RecognizeFromFile: This may cause issues with cv::imread on Windows");
   }
 
+#ifdef _WIN32
   // 在 Windows 上，cv::imread 使用 C 运行时 fopen()，只能处理
   // ANSI 代码页路径。非 ASCII 路径（如中文）会静默失败。
   // 解决方案：通过宽字符 ifstream 读取文件字节，然后用 cv::imdecode 解码。
@@ -1091,6 +1119,16 @@ std::vector<OcrBoxResult> OcrEngine::RecognizeFromFile(
             image.cols, image.rows);
     return Recognize(image);
   }
+#else
+  // POSIX：路径按字节处理，UTF-8 原生支持。使用 std::ifstream 读取后
+  // 交给 cv::imdecode，行为与 Windows 分支一致，也便于统一日志。
+  std::ifstream file(std::filesystem::path(image_path),
+                     std::ios::binary | std::ios::ate);
+  if (!file.is_open()) {
+    OCR_LOG("RecognizeFromFile: failed to open file, errno=%d", errno);
+    return {};
+  }
+#endif
 
   std::streamsize size = file.tellg();
   file.seekg(0, std::ios::beg);

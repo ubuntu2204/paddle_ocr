@@ -104,13 +104,16 @@ message(STATUS "[pp_ocr] OpenCV libs: ${OpenCV_LIBS}")
 # ==============================================================================
 
 # 添加到插件的新源文件应在此处添加
+# 共享的 OCR 引擎与 FFI 实现位于插件根目录下的 cpp/，
+# 与 linux/ 平台共享。
 list(APPEND PLUGIN_SOURCES
   "paddle_ocr_plugin.cpp"
   "paddle_ocr_plugin.h"
-  "ocr_engine.cpp"
-  "ocr_engine.h"
-  "pp_ocr_ffi.cpp"
-  "pp_ocr_ffi.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/ocr_engine.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/ocr_engine.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/pp_ocr_ffi.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/pp_ocr_ffi.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/debug_utils.h"
 )
 
 # 定义插件库目标，其名称不得更改
@@ -135,6 +138,7 @@ target_compile_features(${PLUGIN_NAME} PRIVATE cxx_std_17)
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cpp"
   "${ONNXRUNTIME_INCLUDE_DIR}"
   "${OpenCV_INCLUDE_DIRS}"
 )
@@ -198,6 +202,7 @@ add_executable(${TEST_RUNNER}
 apply_standard_settings(${TEST_RUNNER})
 target_include_directories(${TEST_RUNNER} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cpp"
   "${ONNXRUNTIME_INCLUDE_DIR}"
 )
 target_link_libraries(${TEST_RUNNER} PRIVATE flutter_wrapper_plugin)
