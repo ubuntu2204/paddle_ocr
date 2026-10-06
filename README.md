@@ -61,6 +61,40 @@ Then simply:
 cd example && flutter run -d linux
 ```
 
+### Crash after picking a file on Linux (Impeller / Mesa driver)
+
+On some integrated GPUs — notably **Loongson GF** (PCI vendor `4c54`) — the bundled Mesa driver `gf_dri.so` has a null-pointer bug that Flutter's default **Impeller OpenGLESSDF** backend triggers when a GTK file dialog opens/closes. Symptom: the example's `pickImage()` returns the chosen path but the app crashes right after (`Lost connection to device`). Kernel log:
+
+```
+kernel: pp_ocr_example[...]: segfault at 2 in gf_dri.so
+```
+
+The plugin already mitigates this: `pickImage` prefers `GtkFileChooserNative`, which on systems with `xdg-desktop-portal` delegates the picker to a separate process (no GL in our process). If you still hit it, use one of these workarounds:
+
+```bash
+# Option A: force software rasterization (simplest)
+LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe flutter run -d linux
+
+# Option B: force X11 backend (helps on some Wayland compositors)
+GDK_BACKEND=x11 flutter run -d linux
+
+# Option C: bake the switch into the app. At the top of
+# example/linux/runner/main.cc, before any GTK calls:
+g_setenv("LIBGL_ALWAYS_SOFTWARE", "1", /*overwrite=*/FALSE);
+```
+
+To sanity-check the whole pipeline headlessly (no dialog, no mouse), the example
+ships a self-test triggered by env vars:
+
+```bash
+PP_OCR_SELFTEST_IMAGE=/path/to/your.jpg \
+PP_OCR_PICKIMAGE_FAKE_PATH=/path/to/your.jpg \
+PP_OCR_SELFTEST_VIA_PICK=1 \
+LIBGL_ALWAYS_SOFTWARE=1 \
+flutter run -d linux
+# Look for [SELFTEST] step 1→5 followed by ALL STEPS PASSED in the log.
+```
+
 > **Note:** ONNX Runtime 1.20.1 and OpenCV 4.9.0 are **bundled** with this plugin
 > (`windows/third_party/`). No download or manual setup is required.
 >

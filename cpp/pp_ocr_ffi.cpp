@@ -101,6 +101,7 @@ PP_OCR_EXPORT int pp_ocr_initialize(PpOcrEngine* engine,
                                       const char* det_model_path,
                                       const char* rec_model_path,
                                       const char* dict_path) {
+  OCR_LOG("FFI pp_ocr_initialize: ENTER");
   if (!engine || !det_model_path || !rec_model_path || !dict_path) {
     if (engine) engine->last_error = "Null argument";
     return 0;
@@ -116,6 +117,7 @@ PP_OCR_EXPORT int pp_ocr_initialize(PpOcrEngine* engine,
     return 0;
   }
   engine->last_error.clear();
+  OCR_LOG("FFI pp_ocr_initialize: EXIT ok=1");
   return 1;
 }
 
@@ -135,32 +137,38 @@ PP_OCR_EXPORT const char* pp_ocr_get_last_error(PpOcrEngine* engine) {
 // 从图像文件识别文本
 PP_OCR_EXPORT PpOcrResultArray pp_ocr_recognize_file(
     PpOcrEngine* engine, const char* image_path) {
+  OCR_LOG("FFI pp_ocr_recognize_file: ENTER path='%s'",
+          image_path ? image_path : "(null)");
   if (!engine) return errorResult(nullptr, "Null engine");
   if (!image_path) return errorResult(engine, "Null image_path");
   if (!engine->engine.IsInitialized()) {
     return errorResult(engine, "Engine not initialized");
   }
 
-  OCR_LOG("FFI pp_ocr_recognize_file: path='%s'", image_path);
-
   auto results = engine->engine.RecognizeFromFile(image_path);
-  return convertResults(engine, results);
+  OCR_LOG("FFI pp_ocr_recognize_file: got %zu results, converting", results.size());
+  auto out = convertResults(engine, results);
+  OCR_LOG("FFI pp_ocr_recognize_file: EXIT count=%d", out.count);
+  return out;
 }
 
 // 从图像字节数据识别文本
 PP_OCR_EXPORT PpOcrResultArray pp_ocr_recognize_bytes(
     PpOcrEngine* engine, const uint8_t* data, int length) {
+  OCR_LOG("FFI pp_ocr_recognize_bytes: ENTER length=%d",
+          length);
   if (!engine) return errorResult(nullptr, "Null engine");
   if (!data || length <= 0) return errorResult(engine, "Null or empty data");
   if (!engine->engine.IsInitialized()) {
     return errorResult(engine, "Engine not initialized");
   }
 
-  OCR_LOG("FFI pp_ocr_recognize_bytes: length=%d", length);
-
   std::vector<uint8_t> bytes(data, data + length);
   auto results = engine->engine.RecognizeFromBytes(bytes);
-  return convertResults(engine, results);
+  OCR_LOG("FFI pp_ocr_recognize_bytes: got %zu results, converting", results.size());
+  auto out = convertResults(engine, results);
+  OCR_LOG("FFI pp_ocr_recognize_bytes: EXIT count=%d", out.count);
+  return out;
 }
 
 // 获取 OCR 库版本字符串

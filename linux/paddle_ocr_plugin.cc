@@ -78,15 +78,155 @@ FlValue* ResultsToFlValue(
 }
 
 // ---------------------------------------------------------------------------
-// pickImage：使用 GtkFileChooserDialog 阻塞式弹出文件选择框。
+// pickImage：优先使用 GtkFileChooserNative（可能走 xdg-desktop-portal
+// 子进程，避开本进程 GL），无 portal 时自动回退到 GtkFileChooserDialog。
+//
+// 为什么不用 gtk_dialog_run 同同步环：它会跑一个嵌套的 GMainLoop，期间
+// Flutter engine 的 messenger 也在同一个 GMainContext 上派发，可能使外层
+// 的 method_call 在长时间阻塞后失效。file_picker 等成熟插件均采用
+// g_signal_connect("response") 异步形式。
+//
+// 生命周期：ctx 由 "response" 信号统一处理（Native 与 Dialog 都提供
+// "response" 信号）；对 Native，额外监听 "destroy" 兵底。
 // ---------------------------------------------------------------------------
+struct PickerContext {
+  FlMethodCall* method_call;  // ref-owned；回应后置 nullptr 作为哨兵
+  gpointer widget;            // Native (GtkFileChooserNative*) 或 Dialog
+                              // (GtkWidget*)—— 统一用 gpointer 存，避免
+                              // 假定的 GtkWidget/GObject 继承关系。
+};
+
+void RespondWithEmpty(FlMethodCall* method_call) {
+  g_autoptr(FlValue) empty = fl_value_new_string("");
+  g_autoptr(FlMethodResponse) resp =
+      FL_METHOD_RESPONSE(fl_method_success_response_new(empty));
+  fl_method_call_respond(method_call, resp, nullptr);
+}
+
+// 从 Native 或 Dialog 中取文件名。两者都实现了 GtkFileChooser 接口，
+// 直接 cast 到 GTK_FILE_CHOOSER 即可。
+static gchar* ExtractFilename(gpointer widget) {
+  if (widget && GTK_IS_FILE_CHOOSER(widget)) {
+    return gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(widget));
+  }
+  return nullptr;
+}
+
+// 统一的 "response" 处理：不管来自 GtkFileChooserDialog 还是
+// GtkFileChooserNative，都走这里。GTK 将两个信号的第一个参数都传为
+// 发射者本身，对 Native 它是 GObject*，对 Dialog 它是 GtkWidget*。
+void OnPickerResponse(gpointer widget, gint response_id,
+                       gpointer user_data) {
+  auto* ctx = static_cast<PickerContext*>(user_data);
+  OCR_LOG("pickImage: response_id=%d widget=%p", response_id, widget);
+
+  if (ctx->method_call == nullptr) {
+    // 已回应过，不再重复。注意：此处不再 destroy widget，
+    // 避免重入；Native 会自行回收。
+    return;
+  }
+
+  g_autoptr(FlValue) result = nullptr;
+  if (response_id == GTK_RESPONSE_ACCEPT) {
+    g_autofree gchar* filename = ExtractFilename(widget);
+    if (filename) {
+      OCR_LOG("pickImage: chosen='%s'", filename);
+      result = fl_value_new_string(filename);
+    } else {
+      OCR_LOG("pickImage: ACCEPT but filename=null");
+      result = fl_value_new_string("");
+    }
+  } else {
+    OCR_LOG("pickImage: cancelled/rejected (response=%d)", response_id);
+    result = fl_value_new_string("");
+  }
+
+  g_autoptr(FlMethodResponse) resp =
+      FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+  fl_method_call_respond(ctx->method_call, resp, nullptr);
+  OCR_LOG("pickImage: responded");
+
+  g_object_unref(ctx->method_call);
+  ctx->method_call = nullptr;  // 哨兵
+
+  // 释放 widget：
+  //   • Native 需 gtk_native_dialog_destroy。
+  //   • Dialog 需 gtk_widget_destroy。
+  if (GTK_IS_NATIVE_DIALOG(widget)) {
+    gtk_native_dialog_destroy(GTK_NATIVE_DIALOG(widget));
+  } else {
+    gtk_widget_destroy(GTK_WIDGET(widget));
+  }
+  delete ctx;
+}
+
+// 兵底：如果 widget 先被外部销毁（没走 response），确保 ctx 不泄漏、
+// method_call 能被回应。
+void OnPickerDestroy(GtkWidget* /*widget*/, gpointer user_data) {
+  auto* ctx = static_cast<PickerContext*>(user_data);
+  if (ctx == nullptr) return;
+  if (ctx->method_call != nullptr) {
+    OCR_LOG("pickImage: widget destroyed before response");
+    RespondWithEmpty(ctx->method_call);
+    g_object_unref(ctx->method_call);
+    ctx->method_call = nullptr;
+  }
+  delete ctx;
+}
+
 void DoPickImage(PluginState* state, FlMethodCall* method_call) {
   OCR_LOG("pickImage: enter");
+
+  // Headless 自检钩子：如果设置了 PP_OCR_PICKIMAGE_FAKE_PATH，
+  // 不弹任何 dialog，直接异步地返回固定路径（或取消）。
+  // 避免自动化测试需要人工点击。PP_OCR_PICKIMAGE_FAKE_PATH="" 会
+  // 触发取消分支（Dart 侧拿到空串）。
+  if (const char* fake = g_getenv("PP_OCR_PICKIMAGE_FAKE_PATH")) {
+    OCR_LOG("pickImage: HEADLESS fake path='%s'", fake);
+    // 用 idle_add 异步回应，保持与 dialog 回调同样的时序。
+    struct IdleCtx { FlMethodCall* call; std::string path; };
+    auto* ictx = new IdleCtx{method_call, std::string(fake)};
+    g_object_ref(method_call);
+    g_idle_add(
+        +[](gpointer data) -> gboolean {
+          auto* c = static_cast<IdleCtx*>(data);
+          g_autoptr(FlValue) v = fl_value_new_string(c->path.c_str());
+          g_autoptr(FlMethodResponse) r = FL_METHOD_RESPONSE(
+              fl_method_success_response_new(v));
+          fl_method_call_respond(c->call, r, nullptr);
+          g_object_unref(c->call);
+          delete c;
+          return G_SOURCE_REMOVE;
+        },
+        ictx);
+    return;
+  }
+
   GtkWindow* parent = GetTopLevelWindow(state);
   OCR_LOG("pickImage: parent window=%p", (void*)parent);
 
-  // 注意：GTK 的变参列表以 (const gchar*)NULL 终止；C++ 的 nullptr
-  // 属于 std::nullptr_t，不是指针类型，在变参上下文属 UB。
+  // 优先用 GtkFileChooserNative：在有 xdg-desktop-portal 的系统上会
+  // 把选文件交给独立进程，避开本进程的 GL 驱动问题（如 Loongson
+  // gf_dri.so + Impeller OpenGLESSDF 已知 segfault）。
+  GtkFileChooserNative* native = gtk_file_chooser_native_new(
+      "\xe9\x80\x89\xe6\x8b\xa9\xe5\x9b\xbe\xe7\x89\x87" /* 选择图片 */, parent,
+      GTK_FILE_CHOOSER_ACTION_OPEN,
+      "_Open", "_Cancel");
+
+  if (native) {
+    auto* ctx = new PickerContext{method_call, native};
+    g_object_ref(method_call);
+    g_signal_connect(native, "response", G_CALLBACK(OnPickerResponse), ctx);
+    // Native 不保证销毁时发 "destroy"，但 gtk_native_dialog_destroy
+    // 会回收对象；上面 response 中已经 delete ctx，不再连 destroy。
+    gtk_native_dialog_show(GTK_NATIVE_DIALOG(native));
+    OCR_LOG("pickImage: GtkFileChooserNative shown");
+    return;
+  }
+
+  OCR_LOG("pickImage: native chooser returned NULL, falling back to dialog");
+
+  // 回退到旧路径：GtkFileChooserDialog
   GtkWidget* dialog = gtk_file_chooser_dialog_new(
       "\xe9\x80\x89\xe6\x8b\xa9\xe5\x9b\xbe\xe7\x89\x87" /* 选择图片 */, parent,
       GTK_FILE_CHOOSER_ACTION_OPEN,
@@ -94,15 +234,11 @@ void DoPickImage(PluginState* state, FlMethodCall* method_call) {
       "_Open",   GTK_RESPONSE_ACCEPT,
       (const gchar*)NULL);
   if (!dialog) {
-    OCR_LOG("pickImage: gtk_file_chooser_dialog_new returned NULL");
-    g_autoptr(FlValue) empty = fl_value_new_string("");
-    g_autoptr(FlMethodResponse) resp =
-        FL_METHOD_RESPONSE(fl_method_success_response_new(empty));
-    fl_method_call_respond(method_call, resp, nullptr);
+    OCR_LOG("pickImage: both native and dialog creation failed");
+    RespondWithEmpty(method_call);
     return;
   }
 
-  // 图片过滤器
   GtkFileFilter* img_filter = gtk_file_filter_new();
   gtk_file_filter_set_name(img_filter, "Images");
   for (const char* pat : {"*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tif",
@@ -118,25 +254,13 @@ void DoPickImage(PluginState* state, FlMethodCall* method_call) {
   gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), all_filter);
   g_object_unref(all_filter);
 
-  OCR_LOG("pickImage: running modal dialog...");
-  gint response = gtk_dialog_run(GTK_DIALOG(dialog));
-  OCR_LOG("pickImage: dialog response=%d", response);
+  auto* ctx = new PickerContext{method_call, dialog};
+  g_object_ref(method_call);
+  g_signal_connect(dialog, "response", G_CALLBACK(OnPickerResponse), ctx);
+  g_signal_connect(dialog, "destroy", G_CALLBACK(OnPickerDestroy), ctx);
 
-  g_autoptr(FlValue) result = nullptr;
-  if (response == GTK_RESPONSE_ACCEPT) {
-    g_autofree gchar* filename =
-        gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
-    result = fl_value_new_string(filename ? filename : "");
-    if (filename) OCR_LOG("pickImage: chosen='%s'", filename);
-  } else {
-    result = fl_value_new_string("");
-  }
-  gtk_widget_destroy(dialog);
-
-  g_autoptr(FlMethodResponse) resp =
-      FL_METHOD_RESPONSE(fl_method_success_response_new(result));
-  fl_method_call_respond(method_call, resp, nullptr);
-  OCR_LOG("pickImage: responded");
+  gtk_widget_show_all(dialog);
+  OCR_LOG("pickImage: dialog shown (fallback path)");
 }
 
 // ---------------------------------------------------------------------------

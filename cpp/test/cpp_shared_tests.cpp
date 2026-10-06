@@ -14,10 +14,19 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <vector>
 
 #include "debug_utils.h"
 #include "pp_ocr_ffi.h"
+
+// OpenCV 仅用于在集成测试里合成一张带文字的图片，无额外依赖。
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 namespace paddle_ocr {
 namespace test {
@@ -295,6 +304,130 @@ TEST_F(FfiApiTest, CreateDestroyCycleAllowsReinit) {
   ASSERT_NE(e2, nullptr);
   EXPECT_EQ(pp_ocr_is_initialized(e2), 0);
   pp_ocr_destroy(e2);
+}
+
+// ===========================================================================
+// 集成测试：使用真实模型文件 + 合成的图片，跑完整 OCR 管道。
+//
+// 模型目录定位优先级：
+//   1. 环境变量 PP_OCR_MODEL_DIR
+//   2. 相对当前工作目录的 ../model 与 ./model
+//   3. 硬编码开发机默认位置
+// 未找到时自动 SKIP，不拖挂 CI。
+// ===========================================================================
+namespace {
+
+std::string FindModelDir() {
+  std::vector<std::string> candidates;
+  if (const char* env = std::getenv("PP_OCR_MODEL_DIR"); env && *env) {
+    candidates.emplace_back(env);
+  }
+  candidates.emplace_back("../model");
+  candidates.emplace_back("./model");
+  candidates.emplace_back(
+      "/home/ubuntu/project/paddle_ocr/model");
+  for (const auto& c : candidates) {
+    std::error_code ec;
+    auto det = std::filesystem::path(c) / "det.onnx";
+    auto rec = std::filesystem::path(c) / "inference.onnx";
+    auto dict = std::filesystem::path(c) / "ppocr_v6_dict.txt";
+    if (std::filesystem::exists(det, ec) &&
+        std::filesystem::exists(rec, ec) &&
+        std::filesystem::exists(dict, ec)) {
+      return std::filesystem::absolute(c).string();
+    }
+  }
+  return "";
+}
+
+// 在临时日得中写一张黑底白字的 PNG，返回绝对路径。
+std::string WriteTestImage(const std::string& text) {
+  static int counter = 0;
+  auto tmp = std::filesystem::temp_directory_path();
+  std::string path =
+      (tmp / ("pp_ocr_test_" + std::to_string(getpid()) + "_" +
+              std::to_string(counter++) + ".png"))
+          .string();
+  cv::Mat img = cv::Mat::zeros(120, 480, CV_8UC3);
+  cv::putText(img, text, cv::Point(30, 75), cv::FONT_HERSHEY_SIMPLEX,
+              /*fontScale=*/2.0, cv::Scalar(255, 255, 255), /*thickness=*/3);
+  cv::imwrite(path, img);
+  return path;
+}
+
+}  // namespace
+
+class OcrPipelineIntegration : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    model_dir_ = FindModelDir();
+    if (model_dir_.empty()) {
+      GTEST_SKIP() << "model directory not found; set PP_OCR_MODEL_DIR";
+    }
+    det_ = model_dir_ + "/det.onnx";
+    rec_ = model_dir_ + "/inference.onnx";
+    dict_ = model_dir_ + "/ppocr_v6_dict.txt";
+    engine_ = pp_ocr_create();
+    ASSERT_NE(engine_, nullptr);
+    int rc = pp_ocr_initialize(engine_, det_.c_str(), rec_.c_str(),
+                                dict_.c_str());
+    ASSERT_EQ(rc, 1)
+        << "pp_ocr_initialize failed: "
+        << (pp_ocr_get_last_error(engine_) ? pp_ocr_get_last_error(engine_) : "?");
+  }
+  void TearDown() override {
+    if (engine_) pp_ocr_destroy(engine_);
+    engine_ = nullptr;
+  }
+
+  std::string model_dir_, det_, rec_, dict_;
+  PpOcrEngine* engine_ = nullptr;
+};
+
+TEST_F(OcrPipelineIntegration, RecognizeFileReturnsValidStruct) {
+  std::string png = WriteTestImage("Hello");
+  PpOcrResultArray r = pp_ocr_recognize_file(engine_, png.c_str());
+  EXPECT_EQ(r.error, nullptr) << "recognize_file returned error: "
+                              << (r.error ? r.error : "");
+  EXPECT_GE(r.count, 0);
+  std::error_code ec;
+  std::filesystem::remove(png, ec);
+}
+
+TEST_F(OcrPipelineIntegration, RecognizeBytesReturnsValidStruct) {
+  std::string png = WriteTestImage("World");
+  std::ifstream f(png, std::ios::binary);
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),
+                              std::istreambuf_iterator<char>());
+  f.close();
+  ASSERT_FALSE(bytes.empty());
+
+  PpOcrResultArray r = pp_ocr_recognize_bytes(
+      engine_, bytes.data(), static_cast<int>(bytes.size()));
+  EXPECT_EQ(r.error, nullptr) << "recognize_bytes returned error: "
+                              << (r.error ? r.error : "");
+  EXPECT_GE(r.count, 0);
+  std::error_code ec;
+  std::filesystem::remove(png, ec);
+}
+
+TEST_F(OcrPipelineIntegration, RepeatedCallsDoNotCorruptBuffers) {
+  // Regression guard: the FFI result array is stored on the engine and
+  // reused across calls. Two sequential calls must both return valid
+  // structs (see convertResults in pp_ocr_ffi.cpp which reserves to
+  // prevent c_str() pointer invalidation).
+  std::string a = WriteTestImage("AAA");
+  std::string b = WriteTestImage("BBB");
+
+  PpOcrResultArray r1 = pp_ocr_recognize_file(engine_, a.c_str());
+  EXPECT_EQ(r1.error, nullptr);
+
+  PpOcrResultArray r2 = pp_ocr_recognize_file(engine_, b.c_str());
+  EXPECT_EQ(r2.error, nullptr);
+
+  std::error_code ec;
+  std::filesystem::remove(a, ec);
+  std::filesystem::remove(b, ec);
 }
 
 }  // namespace test

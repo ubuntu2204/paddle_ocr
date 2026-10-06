@@ -73,3 +73,20 @@
   * `cpp/debug_utils.h::HexDump`：`std::hex` 未复位导致尾部字节总数被输出为十六进制（200 被写为 `C8`），补 `std::dec` 复位
   * `cpp/pp_ocr_ffi.cpp::errorResult`：`pp_ocr_recognize_file(nullptr, _)` 与 `pp_ocr_recognize_bytes(nullptr, _, _)` 会对空 `handle` 解引用而 SIGSEGV，改为在 `handle == nullptr` 时返回栈上临时 `PpOcrResultArray`
 
+## 0.3.2
+
+* **修复 Linux example pickImage 选完图后闪退**
+* 根因定位：内核日志 `segfault at 2 in gf_dri.so` —— Loongson GF 集显的 Mesa 驱动和 Flutter Impeller OpenGLESSDF 后端在 GTK dialog 开启/关闭时触发驱动段错误；同场景 Dart 层也会报 `Exception: No Impeller context is available`。不是插件自身的问题。
+* [linux/paddle_ocr_plugin.cc](file:///home/ubuntu/project/paddle_ocr/linux/paddle_ocr_plugin.cc) 弹窗优先使用 **`GtkFileChooserNative`**：在有 `xdg-desktop-portal` 的环境下会交给独立子进程，完全避开本进程 GL；无 portal 时自动回退到 `GtkFileChooserDialog`，行为与之前一致。
+* `OnPickerResponse` 统一处理 Native / Dialog 两种 signal 发送方；`PickerContext.widget` 改为 `gpointer`，避免 GObject/GtkWidget 强转假定；释放分叉：Native 走 `gtk_native_dialog_destroy`，Dialog 走 `gtk_widget_destroy`。
+* 新增 **headless 自动化钩子**，方便 CI/无头复现，不需 xdotool：
+  * `PP_OCR_PICKIMAGE_FAKE_PATH=<path>` — 插件不弹 dialog，直接 `g_idle_add` 异步回应固定路径（空串触发取消分支）
+  * `PP_OCR_SELFTEST_IMAGE=<path>` — example 启动后自动跑 initialize → stat → readAsBytes → decodeImageFromList → recognizeImage → recognizeImageBytes 全链路，每步 `[SELFTEST]` 日志
+  * `PP_OCR_SELFTEST_VIA_PICK=1` — self-test 先走一次 pickImage（搭配 fake path 即可无头验证完整时序）
+* **新增 C++ 集成测试** `OcrPipelineIntegration`（直接调 `pp_ocr_initialize` + `pp_ocr_recognize_file/bytes`，使用仓库 `model/` 真实模型与 `cv::putText` 合成图）确认 OCR 管道在 ASCII / UTF-8 路径下完全健康。当前 ctest 共 40/40 全绿。
+* [cpp/pp_ocr_ffi.cpp](file:///home/ubuntu/project/paddle_ocr/cpp/pp_ocr_ffi.cpp) `pp_ocr_recognize_file/bytes/initialize` 补上 ENTER/EXIT/中途日志，方便定位任何驱动层堆栈问题。
+* **Linux 用户应急开关**（已写入 README）：
+  * `LIBGL_ALWAYS_SOFTWARE=1 flutter run -d linux` — 一劳永逸避开 Mesa 驱动 bug（以性能换稳定性）
+  * `GDK_BACKEND=x11` — 强制走 X11（部分 Wayland 合成器下也会缓解）
+
+

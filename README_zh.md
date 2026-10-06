@@ -59,6 +59,38 @@ ORT_VERSION=1.17.0 bash tool/setup_linux_deps.sh
 cd example && flutter run -d linux
 ```
 
+### Linux 上选完图片后闪退（Impeller / Mesa 驱动已知问题）
+
+部分国产集显（如 **Loongson GF**，PCI vendor `4c54`）自带的 Mesa 驱动 `gf_dri.so`，在 Flutter Linux 默认的 **Impeller OpenGLESSDF** 后端搭配 GTK 文件对话框开启/关闭时存在已知空指针，表现为 example 中 `pickImage` 选完图一瞬间 `Lost connection to device`，内核日志能看到：
+
+```
+kernel: pp_ocr_example[...]: segfault at 2 in gf_dri.so
+```
+
+插件侧已尽量回避（`pickImage` 优先使用 `GtkFileChooserNative`，在有 `xdg-desktop-portal` 的环境下会把选文件交给独立进程，不走本进程 GL）。仍重现时，任选一个应急方案：
+
+```bash
+# 方案 A：强制软件光栅（最简单）
+LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe flutter run -d linux
+
+# 方案 B：强制走 X11，部分 Wayland 合成器下可缓解
+GDK_BACKEND=x11 flutter run -d linux
+
+# 方案 C：发布包时内置开关。在 example/linux/runner/main.cc 开头：
+g_setenv("LIBGL_ALWAYS_SOFTWARE", "1", /*overwrite=*/FALSE);
+```
+
+确认无头链路健康可以直接跑自带的 self-test（不会弹任何 dialog，不需要鼠标）：
+
+```bash
+PP_OCR_SELFTEST_IMAGE=/path/to/your.jpg \
+PP_OCR_PICKIMAGE_FAKE_PATH=/path/to/your.jpg \
+PP_OCR_SELFTEST_VIA_PICK=1 \
+LIBGL_ALWAYS_SOFTWARE=1 \
+flutter run -d linux
+# 日志中会依次看到 [SELFTEST] step 1→ 5 以及 ALL STEPS PASSED
+```
+
 > **注意：** ONNX Runtime 1.20.1 和 OpenCV 4.9.0 已**内置**在本插件中
 > （`windows/third_party/`），无需下载或手动配置。
 >

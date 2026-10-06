@@ -63,7 +63,7 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   /// 3. 都未命中时返回上一级形态路径作为默认值（可在界面修改）。
   static String _modelPath(String name) {
     final sep = Platform.isWindows ? r'\' : '/';
-    final parent = File('${Directory.current.path}${sep}..${sep}model$sep$name');
+    final parent = File('${Directory.current.path}$sep..${sep}model$sep$name');
     if (parent.existsSync()) return parent.absolute.path;
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final besideExe = File('$exeDir${sep}model$sep$name');
@@ -90,6 +90,94 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   void initState() {
     super.initState();
     _checkModelFiles();
+    _maybeStartSelfTest();
+  }
+
+  /// 自动化自检入口。
+  ///
+  /// 当环境变量 `PP_OCR_SELFTEST_IMAGE` 指向一个可读的图片时，
+  /// 启动后自动执行 initialize → recognizeImage，完全跳过需要人工
+  /// 交互的 pickImage 分支，便于无头环境复现问题。
+  void _maybeStartSelfTest() {
+    final selfTestImage = Platform.environment['PP_OCR_SELFTEST_IMAGE'];
+    if (selfTestImage == null || selfTestImage.isEmpty) return;
+    // ignore: avoid_print
+    print('[SELFTEST] image=$selfTestImage');
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _initOcr();
+      await _runSelfTestOnImage(selfTestImage);
+    });
+  }
+
+  Future<void> _runSelfTestOnImage(String path) async {
+    // 可选：先走一遍 pickImage 路径，复现“dialog → respond → 后续 FFI
+    // 调用”的完整时序（需搭配 PP_OCR_PICKIMAGE_FAKE_PATH）。默认不开启，
+    // 避免 dialog 阻塞无 X server 的环境。
+    final viaPick = Platform.environment['PP_OCR_SELFTEST_VIA_PICK'] == '1';
+    try {
+      if (viaPick) {
+        // ignore: avoid_print
+        print('[SELFTEST] pickImage step 0: _ocr.pickImage()');
+        final picked = await _ocr.pickImage();
+        // ignore: avoid_print
+        print('[SELFTEST] pickImage step 0 done: "$picked"');
+        if (picked == null || picked.isEmpty) {
+          // ignore: avoid_print
+          print('[SELFTEST] pickImage returned empty, abort self-test');
+          return;
+        }
+      }
+
+      // ignore: avoid_print
+      print('[SELFTEST] step 1: stat file');
+      final f = File(path);
+      final stat = await f.stat();
+      // ignore: avoid_print
+      print('[SELFTEST] file size=${stat.size} bytes');
+
+      // ignore: avoid_print
+      print('[SELFTEST] step 2: readAsBytes');
+      final bytes = await f.readAsBytes();
+      // ignore: avoid_print
+      print('[SELFTEST] read ${bytes.length} bytes');
+
+      // ignore: avoid_print
+      print('[SELFTEST] step 3: decodeImageFromList');
+      final decoded = await decodeImageFromList(bytes);
+      // ignore: avoid_print
+      print('[SELFTEST] decoded ${decoded.width}x${decoded.height}');
+
+      // ignore: avoid_print
+      print('[SELFTEST] step 4: _ocr.recognizeImage');
+      final results = await _ocr.recognizeImage(path);
+      // ignore: avoid_print
+      print('[SELFTEST] step 4 done: ${results.length} results');
+
+      // ignore: avoid_print
+      print('[SELFTEST] step 5: _ocr.recognizeImageBytes');
+      final results2 = await _ocr.recognizeImageBytes(bytes);
+      // ignore: avoid_print
+      print('[SELFTEST] step 5 done: ${results2.length} results');
+
+      setState(() {
+        _imagePath = path;
+        _imageWidth = decoded.width.toDouble();
+        _imageHeight = decoded.height.toDouble();
+        _results = results;
+        _statusMessage =
+            '[SELFTEST] OK: '
+            'file=${bytes.length}B decoded=${decoded.width}x${decoded.height} '
+            'results=${results.length}/${results2.length}';
+      });
+      // ignore: avoid_print
+      print('[SELFTEST] ALL STEPS PASSED');
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('[SELFTEST] FAILED: $e');
+      // ignore: avoid_print
+      print(st);
+      setState(() => _statusMessage = '[SELFTEST] FAILED: $e');
+    }
   }
 
   /// 检查默认模型文件是否存在，缺失时在状态栏给出明确提示。
@@ -104,7 +192,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
       return idx > 0 ? p.substring(idx + 1) : p;
     }).toList();
     if (missing.isEmpty) return;
-    _statusMessage = '未找到模型文件：${missing.join('、')}。'
+    _statusMessage =
+        '未找到模型文件：${missing.join('、')}。'
         '请将 model 文件夹放到程序目录的上一级，'
         '或在上方输入框中修改路径。';
   }
@@ -193,7 +282,11 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
     });
 
     try {
+      // ignore: avoid_print
+      print('[PICK] step A: await _ocr.pickImage()');
       final path = await _ocr.pickImage();
+      // ignore: avoid_print
+      print('[PICK] step A done: path="$path"');
       if (path == null || path.isEmpty) {
         // 用户未选择图片
         setState(() {
@@ -203,11 +296,19 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
         return;
       }
 
+      // ignore: avoid_print
+      print('[PICK] step B: readAsBytes');
       // 加载图片尺寸，用于精确叠加检测框
       final imageFile = File(path);
-      final decodedImage = await decodeImageFromList(
-        await imageFile.readAsBytes(),
-      );
+      final bytes = await imageFile.readAsBytes();
+      // ignore: avoid_print
+      print('[PICK] step B done: ${bytes.length} bytes');
+
+      // ignore: avoid_print
+      print('[PICK] step C: decodeImageFromList');
+      final decodedImage = await decodeImageFromList(bytes);
+      // ignore: avoid_print
+      print('[PICK] step C done: ${decodedImage.width}x${decodedImage.height}');
 
       setState(() {
         _imagePath = path;
@@ -216,8 +317,12 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
         _statusMessage = 'Recognizing text... This may take a moment.';
       });
 
+      // ignore: avoid_print
+      print('[PICK] step D: _ocr.recognizeImage');
       // 执行 OCR 识别
       final results = await _ocr.recognizeImage(path);
+      // ignore: avoid_print
+      print('[PICK] step D done: ${results.length} results');
 
       setState(() {
         _results = results;
@@ -493,10 +598,13 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
 class OcrBoxPainter extends CustomPainter {
   /// 图片路径
   final String imagePath;
+
   /// OCR 识别结果列表
   final List<OcrResult> results;
+
   /// 原始图片宽度
   final double imageWidth;
+
   /// 原始图片高度
   final double imageHeight;
 

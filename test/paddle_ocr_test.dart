@@ -2,7 +2,6 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pp_ocr/pp_ocr.dart';
-import 'package:pp_ocr/paddle_ocr_method_channel.dart';
 import 'package:pp_ocr/pp_ocr_ffi.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
