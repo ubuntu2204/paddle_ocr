@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pp_ocr/pp_ocr.dart';
 import 'package:pp_ocr/paddle_ocr_method_channel.dart';
+import 'package:pp_ocr/pp_ocr_ffi.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 /// 模拟的 PaddleOcr 平台实现
@@ -38,9 +39,9 @@ void main() {
   final PaddleOcrPlatform initialPlatform = PaddleOcrPlatform.instance;
 
   group('Platform interface', () {
-    // 测试默认平台实例是否为 MethodChannelPaddleOcr
-    test('$MethodChannelPaddleOcr is the default instance', () {
-      expect(initialPlatform, isInstanceOf<MethodChannelPaddleOcr>());
+    // 默认实例为 FfiPaddleOcr（内部会自动回退到 MethodChannel）。
+    test('$FfiPaddleOcr is the default instance', () {
+      expect(initialPlatform, isInstanceOf<FfiPaddleOcr>());
     });
 
     // 测试平台接口不能用 implements 直接实现（会触发断言错误）

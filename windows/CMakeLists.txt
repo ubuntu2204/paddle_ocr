@@ -197,6 +197,7 @@ FetchContent_MakeAvailable(googletest)
 # 构建测试可执行文件
 add_executable(${TEST_RUNNER}
   test/paddle_ocr_plugin_test.cpp
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/test/cpp_shared_tests.cpp"
   ${PLUGIN_SOURCES}
 )
 apply_standard_settings(${TEST_RUNNER})

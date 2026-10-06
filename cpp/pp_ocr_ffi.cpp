@@ -65,11 +65,19 @@ static PpOcrResultArray convertResults(PpOcrEngine* handle,
 }
 
 // 生成一个包含错误信息的结果数组
+// handle 可以为 nullptr（代表“创建前就失败”），此时用一个空的
+// 栈上 PpOcrResultArray 返回，避免对空 handle 解引用。
 static PpOcrResultArray errorResult(PpOcrEngine* handle, const char* msg) {
-  handle->result_array.items = nullptr;
-  handle->result_array.count = 0;
-  handle->result_array.error = msg;
-  return handle->result_array;
+  PpOcrResultArray out;
+  out.items = nullptr;
+  out.count = 0;
+  out.error = msg;
+  if (handle) {
+    // 仍然将错误写回 handle（便于后续查询），然后返回。
+    handle->result_array = out;
+    return handle->result_array;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

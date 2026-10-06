@@ -218,6 +218,7 @@ if(_pp_ocr_tests_enabled AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/paddle_ocr
 
   add_executable(${TEST_RUNNER}
     test/paddle_ocr_plugin_test.cc
+    "${PLUGIN_SHARED_DIR}/test/cpp_shared_tests.cpp"
     ${PLUGIN_SOURCES}
   )
   apply_standard_settings(${TEST_RUNNER})

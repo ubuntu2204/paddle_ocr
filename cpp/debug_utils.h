@@ -42,7 +42,8 @@ inline std::string HexDump(const std::string& s, size_t max_bytes = 128) {
     oss << std::setw(2) << static_cast<int>(static_cast<unsigned char>(s[i]));
   }
   if (s.size() > max_bytes) {
-    oss << " ... (" << s.size() << " bytes total)";
+    // 回退到十进制输出，避免前面的 std::hex 将字节总数也排为十六进制。
+    oss << " ... (" << std::dec << s.size() << " bytes total)";
   }
   return oss.str();
 }

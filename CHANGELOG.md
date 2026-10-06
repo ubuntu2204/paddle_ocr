@@ -57,3 +57,19 @@
 * 插件 Linux 产物链接时自动向下游传递 `-rpath-link`，避免链接 runner 时报 `libonnxruntime.so.1 not found`
 * `debug_utils.h` 里 `char_count` 增加 `(void)` 显式使用，修复 Linux 下 `-Werror=unused-but-set-variable`
 
+## 0.3.1
+
+* **测试覆盖扩展**
+* 新增 Dart 单元测试：
+  * `test/ocr_result_test.dart`——30 个用例，涵盖 `fromMap` 正常解析 / 默认值 / 异常输入 / 常量构造 / `toString`
+  * `test/pp_ocr_ffi_test.dart`——验证 `FfiPaddleOcr` 在测试宿主上自动回退到 `MethodChannel`，以及 `dispose` 安全/幂等
+  * `test/paddle_ocr_errors_test.dart`——验证 `PlatformException` 传播、`MissingPluginException`、参数 key 形式、返回值类型偏差
+  * `test/pp_ocr_api_test.dart`——顶层 `PaddleOcr` 入口的懒加载、实例缓存、`dispose` 后重新读取
+* 新增 C++ 共享单元测试 `cpp/test/cpp_shared_tests.cpp` + 独立可构建的 `cpp/test/CMakeLists.txt`（优先用系统 GoogleTest，否则 FetchContent），共 37 个用例，覆盖 `HexDump`、`ValidateUtf8Detailed` 与 `pp_ocr_ffi` C API
+* 接入平台测试目标：`windows/CMakeLists.txt` 与 `linux/CMakeLists.txt` 的测试目标同时编译 `cpp_shared_tests.cpp`；`linux/test/paddle_ocr_plugin_test.cc` 验证导出符号可链接
+* 拓展 `example/integration_test/plugin_integration_test.dart`：平台版本、真实模型 `initialize`、失败路径、`dispose` 幂等、垃圾图 `recognizeImage` 不崩等（模型目录自动探测，可用 `PP_OCR_MODEL_DIR` 覆盖）
+* 新增 `tool/run_all_tests.sh`（可附带 `--with-build`）：一次性跑 `flutter analyze` + `flutter test` + `ctest`（+ 可选 `flutter build linux`）
+* **修复测试暴露的两个真 bug**
+  * `cpp/debug_utils.h::HexDump`：`std::hex` 未复位导致尾部字节总数被输出为十六进制（200 被写为 `C8`），补 `std::dec` 复位
+  * `cpp/pp_ocr_ffi.cpp::errorResult`：`pp_ocr_recognize_file(nullptr, _)` 与 `pp_ocr_recognize_bytes(nullptr, _, _)` 会对空 `handle` 解引用而 SIGSEGV，改为在 `handle == nullptr` 时返回栈上临时 `PpOcrResultArray`
+

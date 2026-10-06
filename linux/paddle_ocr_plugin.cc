@@ -19,10 +19,20 @@ namespace {
 
 struct PluginState {
   std::unique_ptr<paddle_ocr::OcrEngine> engine;
-  GtkWindow* parent_window = nullptr;  // 弱引用，由 Flutter view 拥有
+  FlView* view = nullptr;  // 弱引用，由宿主 Flutter widget 树拥有
 
   PluginState() : engine(std::make_unique<paddle_ocr::OcrEngine>()) {}
 };
+
+// 安全地获取当前 FlView 所属的顶层 GtkWindow。返回 nullptr
+// 表示对话框可以无父窗弹出。不在注册时缓存，避免注册时 FlView
+// 尚未 realize / 尚未加入窗口时强转到 GtkWindow 造成 SIGSEGV。
+GtkWindow* GetTopLevelWindow(PluginState* state) {
+  if (!state || !GTK_IS_WIDGET(state->view)) return nullptr;
+  GtkWidget* top = gtk_widget_get_toplevel(GTK_WIDGET(state->view));
+  if (top && GTK_IS_WINDOW(top)) return GTK_WINDOW(top);
+  return nullptr;
+}
 
 // 从 FlValue map 中安全读取字符串字段；不存在或类型不匹配时返回空串。
 std::string GetArgString(FlValue* args, const char* key) {
@@ -71,13 +81,30 @@ FlValue* ResultsToFlValue(
 // pickImage：使用 GtkFileChooserDialog 阻塞式弹出文件选择框。
 // ---------------------------------------------------------------------------
 void DoPickImage(PluginState* state, FlMethodCall* method_call) {
+  OCR_LOG("pickImage: enter");
+  GtkWindow* parent = GetTopLevelWindow(state);
+  OCR_LOG("pickImage: parent window=%p", (void*)parent);
+
+  // 注意：GTK 的变参列表以 (const gchar*)NULL 终止；C++ 的 nullptr
+  // 属于 std::nullptr_t，不是指针类型，在变参上下文属 UB。
   GtkWidget* dialog = gtk_file_chooser_dialog_new(
-      "选择图片", state->parent_window, GTK_FILE_CHOOSER_ACTION_OPEN,
-      "_取消", GTK_RESPONSE_CANCEL, "_确定", GTK_RESPONSE_ACCEPT, nullptr);
+      "\xe9\x80\x89\xe6\x8b\xa9\xe5\x9b\xbe\xe7\x89\x87" /* 选择图片 */, parent,
+      GTK_FILE_CHOOSER_ACTION_OPEN,
+      "_Cancel", GTK_RESPONSE_CANCEL,
+      "_Open",   GTK_RESPONSE_ACCEPT,
+      (const gchar*)NULL);
+  if (!dialog) {
+    OCR_LOG("pickImage: gtk_file_chooser_dialog_new returned NULL");
+    g_autoptr(FlValue) empty = fl_value_new_string("");
+    g_autoptr(FlMethodResponse) resp =
+        FL_METHOD_RESPONSE(fl_method_success_response_new(empty));
+    fl_method_call_respond(method_call, resp, nullptr);
+    return;
+  }
 
   // 图片过滤器
   GtkFileFilter* img_filter = gtk_file_filter_new();
-  gtk_file_filter_set_name(img_filter, "图片文件");
+  gtk_file_filter_set_name(img_filter, "Images");
   for (const char* pat : {"*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tif",
                           "*.tiff", "*.webp"}) {
     gtk_file_filter_add_pattern(img_filter, pat);
@@ -86,17 +113,21 @@ void DoPickImage(PluginState* state, FlMethodCall* method_call) {
   g_object_unref(img_filter);
 
   GtkFileFilter* all_filter = gtk_file_filter_new();
-  gtk_file_filter_set_name(all_filter, "所有文件");
+  gtk_file_filter_set_name(all_filter, "All Files");
   gtk_file_filter_add_pattern(all_filter, "*");
   gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), all_filter);
   g_object_unref(all_filter);
 
+  OCR_LOG("pickImage: running modal dialog...");
   gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+  OCR_LOG("pickImage: dialog response=%d", response);
+
   g_autoptr(FlValue) result = nullptr;
   if (response == GTK_RESPONSE_ACCEPT) {
     g_autofree gchar* filename =
         gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
     result = fl_value_new_string(filename ? filename : "");
+    if (filename) OCR_LOG("pickImage: chosen='%s'", filename);
   } else {
     result = fl_value_new_string("");
   }
@@ -105,6 +136,7 @@ void DoPickImage(PluginState* state, FlMethodCall* method_call) {
   g_autoptr(FlMethodResponse) resp =
       FL_METHOD_RESPONSE(fl_method_success_response_new(result));
   fl_method_call_respond(method_call, resp, nullptr);
+  OCR_LOG("pickImage: responded");
 }
 
 // ---------------------------------------------------------------------------
@@ -242,10 +274,8 @@ extern "C" FLUTTER_PLUGIN_EXPORT void paddle_ocr_plugin_register_with_registrar(
   FlView* view = fl_plugin_registrar_get_view(registrar);
 
   auto* state = new PluginState();
-  if (view) {
-    state->parent_window =
-        GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(view)));
-  }
+  // 保存 FlView 弱引用；实际 GtkWindow 在 pickImage 时懒查找。
+  state->view = view;
 
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   g_autoptr(FlMethodChannel) channel = fl_method_channel_new(
