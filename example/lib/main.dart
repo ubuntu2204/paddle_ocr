@@ -257,6 +257,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
         recModelPath: _recModelCtrl.text.trim(),
         dictPath: _dictPathCtrl.text.trim(),
       );
+      // 初始化后刷新原生后端信息（FFI 引擎此时才真正创建）。
+      await _loadBackendInfo();
       setState(() {
         _initialized = ok;
         _statusMessage = ok

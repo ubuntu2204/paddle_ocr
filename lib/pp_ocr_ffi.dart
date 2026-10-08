@@ -139,6 +139,10 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
 
   @override
   Future<String?> getPlatformVersion() async {
+    // 先确保引擎已创建：本方法常在 initialize 之前被调用（如界面启动时
+    // 展示原生库版本），若不 ensure，_ffiAvailable 恒为 false，会永远走
+    // MethodChannel 分支而查不到真实的原生库版本。
+    _ensureEngine();
     if (_ffiAvailable) {
       try {
         return PpOcrFfiBindings.instance.version();
