@@ -1,9 +1,13 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:developer' as developer;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:pp_ocr/pp_ocr.dart';
+
+/// 应用版本号（与根 pubspec.yaml 的 version 保持同步）。
+const String kAppVersion = '0.3.2';
 
 /// 应用程序入口函数
 void main() {
@@ -84,12 +88,31 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   double _imageWidth = 0;
   // 原始图片高度（用于精确绘制检测框）
   double _imageHeight = 0;
+  // 原生后端信息（FFI 时为 "pp_ocr x.y.z"，MethodChannel 时为平台名）。
+  // 与 kAppVersion 对照可发现 Dart 包与原生库版本错配（如部署残留旧 DLL）。
+  String? _backendInfo;
 
   @override
   void initState() {
     super.initState();
     _checkModelFiles();
     _maybeStartSelfTest();
+    _loadBackendInfo();
+  }
+
+  /// 获取原生后端版本信息（异步，不阻塞界面）。
+  ///
+  /// FFI 可用时 [PaddleOcr.getPlatformVersion] 返回原生库版本字符串
+  /// （形如 "pp_ocr 0.3.2"）；FFI 不可用回退 MethodChannel 时返回
+  /// 平台名（"Windows 10+" / "Linux"）。据此可判断当前生效的后端。
+  Future<void> _loadBackendInfo() async {
+    try {
+      final v = await _ocr.getPlatformVersion();
+      if (!mounted) return;
+      setState(() => _backendInfo = (v == null || v.isEmpty) ? null : v);
+    } catch (_) {
+      // 获取失败不影响主流程；保持 null 即状态栏不显示。
+    }
   }
 
   /// 自动化自检入口。
@@ -354,11 +377,36 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
     }
   }
 
+  /// 状态栏常驻信息行：后端与版本、原生库版本、最近一次识别的图尺寸。
+  String get _infoLine {
+    final parts = <String>[
+      'app v$kAppVersion',
+      if (_backendInfo != null) 'native: $_backendInfo',
+      if (_imageWidth > 0 && _imageHeight > 0)
+        'image: ${_imageWidth.round()}x${_imageHeight.round()}',
+    ];
+    return parts.join('  |  ');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('PP-OCRv6 Offline OCR Demo'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('PP-OCRv6 Offline OCR Demo'),
+            const SizedBox(width: 12),
+            Text(
+              'v$kAppVersion',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+              ),
+            ),
+          ],
+        ),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: Column(
@@ -378,20 +426,35 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
               ],
             ),
           ),
-          // 底部状态栏（仅在有状态消息时显示）
-          if (_statusMessage != null)
-            Container(
-              width: double.infinity,
-              constraints: const BoxConstraints(maxHeight: 120),
-              padding: const EdgeInsets.all(8),
-              color: Colors.grey[200],
-              child: SingleChildScrollView(
-                child: SelectableText(
-                  _statusMessage!,
-                  style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
-                ),
+          // 底部状态栏：常驻信息行（后端/版本/图尺寸）+ 临时消息（如有）。
+          // 后端信息与 Dart 包版本对照，可发现 Dart 与原生库版本错配。
+          Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(maxHeight: 140),
+            padding: const EdgeInsets.all(8),
+            color: Colors.grey[200],
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SelectableText(
+                    _infoLine,
+                    style: const TextStyle(
+                        fontSize: 12, fontFamily: 'monospace'),
+                  ),
+                  if (_statusMessage != null) ...[
+                    const SizedBox(height: 4),
+                    SelectableText(
+                      _statusMessage!,
+                      style: const TextStyle(
+                          fontSize: 12, fontFamily: 'monospace'),
+                    ),
+                  ],
+                ],
               ),
             ),
+          ),
         ],
       ),
     );
@@ -624,11 +687,19 @@ class OcrBoxPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0;
 
-    // 计算将图片等比缩放到画布的缩放比例
-    // 图片使用 BoxFit.contain 方式显示
+    // 计算将图片等比缩放到画布的缩放比例。
+    //
+    // 图片的实际显示控件是 Center(child: Image.file(fit: BoxFit.contain))。
+    // RenderImage 在宽松约束下通过 constrainSizeAndAttemptToPreserveAspectRatio
+    // 计算显示尺寸——只会把原图"夹小"到约束内，**不会放大**小于面板的图。
+    // 因此这里的 scale 必须加上 1.0 上限，与显示行为严格一致：
+    //   * 图 >= 面板：scale = min(sx, sy)（等比缩小铺满，与 contain 一致）
+    //   * 图 <  面板：scale = 1（原图尺寸显示，框也 1:1 映射）
+    // 否则小图会被此公式"虚拟放大"，框整体溢出图片显示区（画框错位 bug）。
     final double scaleX = size.width / imageWidth;
     final double scaleY = size.height / imageHeight;
-    final double scale = scaleX < scaleY ? scaleX : scaleY;
+    final double scale =
+        math.min(1.0, math.min(scaleX, scaleY));
 
     // 实际显示的图片尺寸（宽高比不同时会出现留白）
     final double displayedW = imageWidth * scale;
