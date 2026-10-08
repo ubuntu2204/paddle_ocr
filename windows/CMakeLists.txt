@@ -63,6 +63,20 @@ elseif(DEFINED ENV{OpenCV_DIR} AND EXISTS "$ENV{OpenCV_DIR}/OpenCVConfig.cmake")
   set(OpenCV_DIR "$ENV{OpenCV_DIR}" CACHE PATH "" FORCE)
   find_package(OpenCV REQUIRED)
 elseif(EXISTS "${_BUNDLED_OPENCV_DIR}/include/opencv2/opencv.hpp")
+  # 内嵌二进制（opencv_world490 .dll/.lib）已从仓库移除：所有构建走
+  # find_package 分支（交叉编译注入的静态 OpenCV / 系统安装）。此处仅
+  # 保留头文件作为"曾经内嵌"的探测锚点；若有人不带 OpenCV_DIR 在真
+  # Windows + MSVC 环境构建，在此给出明确指引，而不是链接期神秘失败。
+  if(NOT DEFINED OpenCV_DIR AND NOT DEFINED ENV{OpenCV_DIR})
+    message(FATAL_ERROR
+      "[pp_ocr] Bundled OpenCV binaries were removed from this repo "
+      "(the opencv_world490 binaries are no longer shipped).\n"
+      "Set -DOpenCV_DIR=<path-to-OpenCVConfig.cmake> (or the OpenCV_DIR env "
+      "var) to point to an OpenCV installation. Static builds built with the "
+      "same toolchain are recommended for cross-compile scenarios.\n"
+      "To restore the legacy bundled-MSVC layout, retrieve the removed "
+      "binaries from the git history (see the commit touching this message).")
+  endif()
   message(STATUS "[pp_ocr] Using bundled OpenCV 4.9.0")
   # 标记：当前使用内嵌的 MSVC OpenCV（动态库），需要随产物打包 DLL。
   # 走 find_package 分支（如交叉编译注入的静态 OpenCV）时不打包。

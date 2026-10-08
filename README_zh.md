@@ -11,7 +11,7 @@
 - **文本检测** — 基于 DB（可微分二值化）的文本检测
 - **文本识别** — 基于 CRNN + CTC 的文本识别，支持中文、英文及 18,000+ 字符
 - **Unicode 路径支持** — 正确处理 Windows 上的非 ASCII 文件路径（中文、日文等）
-- **内置依赖** — ONNX Runtime 和 OpenCV 已打包，无需下载
+- **内置 ONNX Runtime** — ONNX Runtime 已打包，无需下载；OpenCV 通过 `find_package` 解析（设置 `OpenCV_DIR`）
 - **检测框可视化** — 返回检测框坐标、识别文本和置信度
 
 ## 平台支持
@@ -91,17 +91,17 @@ flutter run -d linux
 # 日志中会依次看到 [SELFTEST] step 1→ 5 以及 ALL STEPS PASSED
 ```
 
-> **注意：** ONNX Runtime 1.20.1 和 OpenCV 4.9.0 已**内置**在本插件中
+> **注意：** ONNX Runtime 1.20.1 已**内置**在本插件中
 > （`windows/third_party/`），无需下载或手动配置。
 >
 > 内置文件包括：
 > - `onnxruntime.dll` / `onnxruntime.lib` / 头文件 — ONNX Runtime 推理引擎
-> - `opencv_world490.dll` / `opencv_world490.lib` / `opencv_world490d.lib` / 头文件 — OpenCV 图像处理
 >
-> 如果运行时遇到"找不到 `opencv_world490d.dll`"的错误，说明你的应用在 Debug 模式下运行，
-> 但 debug DLL 未找到。由于 debug DLL（124 MB）超过 GitHub 文件大小限制，只内置了 release 版
-> `opencv_world490.dll`。**Debug 构建在运行时使用 release DLL** — 这是安全的，可以正常工作。
-> 只需确保 `opencv_world490.dll` 已复制到应用输出目录（这通过 CMake `bundled_libraries` 自动完成）。
+> OpenCV 在 Windows 上**不再内置**（原先内置的 opencv_world490 二进制已移除，
+> 所有构建统一走 `find_package(OpenCV)`）。请通过 `-DOpenCV_DIR=<OpenCVConfig.cmake
+> 所在路径>` 或 `OpenCV_DIR` 环境变量指向你的 OpenCV 安装。交叉编译场景建议用
+> 同工具链静态编译的 OpenCV（静态链接，产物无需携带 OpenCV DLL）。Linux 上
+> 安装 `libopencv-dev` 或同样设置 `OpenCV_DIR` 即可。
 
 ## 安装
 

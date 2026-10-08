@@ -11,7 +11,7 @@ A Flutter plugin for offline OCR (Optical Character Recognition) on Windows and 
 - **Text Detection** — DB (Differentiable Binarization) based text detection.
 - **Text Recognition** — CRNN + CTC based text recognition with support for Chinese, English, and 18,000+ characters.
 - **Unicode Path Support** — Correctly handles non-ASCII file paths (Chinese, Japanese, etc.) on Windows.
-- **Bundled Dependencies** — ONNX Runtime and OpenCV are included, no download required.
+- **Bundled ONNX Runtime** — ONNX Runtime is included, no download required. OpenCV is resolved via `find_package` (set `OpenCV_DIR`).
 - **Bounding Box Overlay** — Returns detection boxes with recognized text and confidence scores.
 
 ## Platform Support
@@ -95,19 +95,19 @@ flutter run -d linux
 # Look for [SELFTEST] step 1→5 followed by ALL STEPS PASSED in the log.
 ```
 
-> **Note:** ONNX Runtime 1.20.1 and OpenCV 4.9.0 are **bundled** with this plugin
+> **Note:** ONNX Runtime 1.20.1 is **bundled** with this plugin
 > (`windows/third_party/`). No download or manual setup is required.
 >
 > The bundled files include:
 > - `onnxruntime.dll` / `onnxruntime.lib` / headers — ONNX Runtime inference engine
-> - `opencv_world490.dll` / `opencv_world490.lib` / `opencv_world490d.lib` / headers — OpenCV image processing
 >
-> If you encounter a "missing `opencv_world490d.dll`" error at runtime, it means
-> your app is running in Debug mode and the debug DLL was not found. Since the debug
-> DLL (124 MB) exceeds GitHub's file size limit, only the release `opencv_world490.dll`
-> is bundled. **Debug builds use the release DLL at runtime** — this is safe and works
-> correctly. Simply ensure `opencv_world490.dll` is copied to your app's output directory
-> (this happens automatically via CMake `bundled_libraries`).
+> OpenCV is **not** bundled on Windows anymore (the former bundled
+> `opencv_world490` binaries were removed — every build now goes through
+> `find_package(OpenCV)`). Point CMake at your OpenCV installation via
+> `-DOpenCV_DIR=<path-to-OpenCVConfig.cmake>` or the `OpenCV_DIR` environment
+> variable. For cross-compile scenarios, a static OpenCV built with the same
+> toolchain is recommended (it links statically, so no DLL ships with the
+> app). On Linux, install `libopencv-dev` or set `OpenCV_DIR` likewise.
 
 ## Installation
 

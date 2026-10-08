@@ -75,6 +75,10 @@
 
 ## 0.3.2
 
+* **移除 Windows 内嵌 OpenCV 二进制**（`opencv_world490` 的 dll/lib 共约 68MB）：所有 Windows 构建实际都走 `find_package(OpenCV)`（交叉编译注入的静态 OpenCV），内嵌 MSVC 二进制从未参与且已过时。头文件保留；如需在真 Windows + MSVC 环境构建，请设置 `-DOpenCV_DIR` 指向自己的 OpenCV（缺失时 CMake 给出明确指引，不再链接期神秘失败）。需要旧文件可从 git 历史找回。
+* **修复 example 画框错位**：`OcrBoxPainter` 的缩放公式会"放大"小于面板的图片，而 `Image.file(fit: BoxFit.contain)` 在宽松约束下只缩小不放大——小图（如 291×340）的检测框整体按 `min(sx,sy)` 虚拟放大溢出图片显示区。修复：scale 加 `min(1.0, …)` 上限，与 RenderImage 语义严格一致。
+* **example 界面显示版本号**：AppBar 显示 `v0.3.2`；底部状态栏常驻信息行显示 `app v0.3.2 | native: pp_ocr 0.3.2 | image: WxH`——Dart 包与原生库版本并列展示，可一眼识破部署错配（旧 DLL 混新 Dart 快照）。
+* `lib/pp_ocr_ffi.dart` `getPlatformVersion()` 在 `initialize` 之前调用时永远走 MethodChannel（查不到原生库版本）——补上 `_ensureEngine()` 前置；`cpp/pp_ocr_ffi.cpp` 的 `kVersion` 从过时的 0.2.0 同步为 0.3.2。
 * **修复 Linux example pickImage 选完图后闪退**
 * 根因定位：内核日志 `segfault at 2 in gf_dri.so` —— Loongson GF 集显的 Mesa 驱动和 Flutter Impeller OpenGLESSDF 后端在 GTK dialog 开启/关闭时触发驱动段错误；同场景 Dart 层也会报 `Exception: No Impeller context is available`。不是插件自身的问题。
 * [linux/paddle_ocr_plugin.cc](file:///home/ubuntu/project/paddle_ocr/linux/paddle_ocr_plugin.cc) 弹窗优先使用 **`GtkFileChooserNative`**：在有 `xdg-desktop-portal` 的环境下会交给独立子进程，完全避开本进程 GL；无 portal 时自动回退到 `GtkFileChooserDialog`，行为与之前一致。
