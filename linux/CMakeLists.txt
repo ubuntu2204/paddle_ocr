@@ -73,9 +73,12 @@ message(STATUS "[pp_ocr] ONNX Runtime link target: ${ONNXRUNTIME_LINK_TARGET}")
 # ==============================================================================
 # 依赖项：OpenCV
 # ==============================================================================
-# Linux 上默认使用系统安装的 OpenCV（apt install libopencv-dev）。
-# 也可通过 -DOpenCV_DIR=<path> 指向自定义位置。
-# 若插件目录下存在 linux/third_party/opencv/，则优先使用。
+# 查找优先级（与 Windows 端对齐）：
+#   1) linux/third_party/opencv/（内嵌，随插件打包）
+#   2) -DOpenCV_DIR=<path>（CMake 变量）
+#   3) 环境变量 OpenCV_DIR
+#   4) 本机自编译安装（自动探测，静态库，无需随产物打包）
+#   5) 系统安装（apt install libopencv-dev）
 # ==============================================================================
 set(_BUNDLED_OPENCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/opencv")
 
@@ -86,7 +89,27 @@ if(EXISTS "${_BUNDLED_OPENCV_DIR}/lib/libopencv_core.so"
   file(GLOB _BUNDLED_OPENCV_LIBS "${_BUNDLED_OPENCV_DIR}/lib/libopencv_*.so")
   set(OpenCV_LIBS ${_BUNDLED_OPENCV_LIBS})
 else()
-  message(STATUS "[pp_ocr] Searching for system OpenCV (>= 4.0)...")
+  if(NOT OpenCV_DIR AND DEFINED ENV{OpenCV_DIR}
+     AND EXISTS "$ENV{OpenCV_DIR}/OpenCVConfig.cmake")
+    set(OpenCV_DIR "$ENV{OpenCV_DIR}" CACHE PATH "OpenCV config dir" FORCE)
+    message(STATUS "[pp_ocr] Using OpenCV_DIR from env: $ENV{OpenCV_DIR}")
+  endif()
+  # 本机自编译的最小版 OpenCV（core/imgproc/imgcodecs，静态库）：
+  # 开发机未安装系统 libopencv-dev 时自动回退到该安装，避免直接失败。
+  # 注意用 NOT OpenCV_DIR 而非 NOT DEFINED：此前失败的 configure 可能
+  # 在缓存里留下 OpenCV_DIR-NOTFOUND，DEFINED 仍为真但值为假。
+  if(NOT OpenCV_DIR)
+    set(_OPENCV_LOCAL_CANDIDATES
+      "/home/ubuntu/project/opencv/install_linux_min/lib/cmake/opencv4")
+    foreach(_cand IN LISTS _OPENCV_LOCAL_CANDIDATES)
+      if(EXISTS "${_cand}/OpenCVConfig.cmake")
+        set(OpenCV_DIR "${_cand}" CACHE PATH "OpenCV config dir" FORCE)
+        message(STATUS "[pp_ocr] Auto-detected local OpenCV: ${_cand}")
+        break()
+      endif()
+    endforeach()
+  endif()
+  message(STATUS "[pp_ocr] Searching for OpenCV (>= 4.0)...")
   find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
   message(STATUS "[pp_ocr] Found OpenCV ${OpenCV_VERSION} at ${OpenCV_DIR}")
 endif()
