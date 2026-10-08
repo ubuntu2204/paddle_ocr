@@ -115,10 +115,14 @@ Add this to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  pp_ocr: ^0.2.1
+  pp_ocr: ^0.3.2
 ```
 
 ## Model Files
+
+Model files are **not** included in the pub package or the git repository
+(they total ~77 MB — too large to ship; the plugin itself needs none of them,
+since you pass model paths to `initialize()` yourself).
 
 Download the PP-OCRv6 ONNX models and place them in a `model/` directory:
 
@@ -129,8 +133,15 @@ model/
 └── ppocr_v6_dict.txt    # Character dictionary (18,708 entries)
 ```
 
-Models can be obtained from [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)
-and converted to ONNX format using Paddle2ONNX.
+- **Pre-converted copies**: grab them from this repo's
+  [GitHub Releases](https://github.com/ubuntu2204/paddle_ocr/releases)
+  (`model.zip` attachment).
+- **Convert yourself**: models can be obtained from
+  [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) and converted to
+  ONNX format using Paddle2ONNX.
+
+> The bundled `example/` app auto-detects `model/` next to the repo root (or
+> beside the executable) — the local dev layout stays unchanged.
 
 ## Usage
 

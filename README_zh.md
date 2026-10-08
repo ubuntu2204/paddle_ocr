@@ -109,10 +109,13 @@ flutter run -d linux
 
 ```yaml
 dependencies:
-  pp_ocr: ^0.2.1
+  pp_ocr: ^0.3.2
 ```
 
 ## 模型文件
+
+模型文件**不随** pub 包 / git 仓库分发（共约 77MB，过大；插件本身不依赖
+它们——模型路径由你在 `initialize()` 时传入）。
 
 下载 PP-OCRv6 ONNX 模型，放置在 `model/` 目录下：
 
@@ -123,8 +126,14 @@ model/
 └── ppocr_v6_dict.txt    # 字符字典（18,708 个条目）
 ```
 
-模型可从 [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) 获取，
-并使用 Paddle2ONNX 转换为 ONNX 格式。
+- **已转换好的副本**：从本仓库的
+  [GitHub Releases](https://github.com/ubuntu2204/paddle_ocr/releases)
+  下载（`model.zip` 附件）。
+- **自行转换**：模型可从 [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)
+  获取，并使用 Paddle2ONNX 转换为 ONNX 格式。
+
+> `example/` 会自动探测仓库根目录旁（或可执行文件旁）的 `model/`——
+> 本地开发布局不变。
 
 ## 使用方法
 

@@ -40,6 +40,12 @@ example/windows/flutter/generated_config.cmake
 
 # Pre-built dependencies (已内置到 windows/third_party/，无需缓存目录)
 
+# 模型文件不进 git / pub 包（共 ~77MB：det.onnx 4MB + inference.onnx 73MB）。
+# 本地开发：自行下载后放回 model/（example 自检与集成测试依赖它）。
+# 发布产物不含模型——插件运行时由调用方通过 initialize() 传入模型路径。
+# 模型获取见 README「Model files」章节（GitHub Releases 附件）。
+/model/
+
 # OS-specific files
 Thumbs.db
 desktop.ini

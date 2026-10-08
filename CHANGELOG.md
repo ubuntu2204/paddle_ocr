@@ -75,6 +75,7 @@
 
 ## 0.3.2
 
+* **发布包瘦身（91MB → ~26MB）**：`model/`（det.onnx + inference.onnx + 字典，共约 77MB）不再随 pub 包 / git 仓库分发——插件运行不需要它们（模型路径由调用方传入），仅 example 自检与集成测试使用。模型获取方式见 README「模型文件」章节（GitHub Releases 附件或 Paddle2ONNX 自行转换）；本地开发布局不变（example 自动探测 `model/` 目录）。
 * **移除 Windows 内嵌 OpenCV 二进制**（`opencv_world490` 的 dll/lib 共约 68MB）：所有 Windows 构建实际都走 `find_package(OpenCV)`（交叉编译注入的静态 OpenCV），内嵌 MSVC 二进制从未参与且已过时。头文件保留；如需在真 Windows + MSVC 环境构建，请设置 `-DOpenCV_DIR` 指向自己的 OpenCV（缺失时 CMake 给出明确指引，不再链接期神秘失败）。需要旧文件可从 git 历史找回。
 * **修复 example 画框错位**：`OcrBoxPainter` 的缩放公式会"放大"小于面板的图片，而 `Image.file(fit: BoxFit.contain)` 在宽松约束下只缩小不放大——小图（如 291×340）的检测框整体按 `min(sx,sy)` 虚拟放大溢出图片显示区。修复：scale 加 `min(1.0, …)` 上限，与 RenderImage 语义严格一致。
 * **example 界面显示版本号**：AppBar 显示 `v0.3.2`；底部状态栏常驻信息行显示 `app v0.3.2 | native: pp_ocr 0.3.2 | image: WxH`——Dart 包与原生库版本并列展示，可一眼识破部署错配（旧 DLL 混新 Dart 快照）。
