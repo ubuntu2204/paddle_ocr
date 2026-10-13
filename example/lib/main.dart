@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:developer' as developer;
 
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:material_ui/material_ui.dart';
 import 'package:pp_ocr/pp_ocr.dart';
 
@@ -599,15 +600,51 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   /// 构建识别结果列表面板
   ///
   /// 显示所有识别到的文本区域，每项包含序号、文本内容和置信度。
+  /// 把 [text] 写入系统剪贴板，并用 SnackBar 提示。
+  void _copyToClipboard(String text, String label) {
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(label),
+        duration: const Duration(milliseconds: 900),
+      ),
+    );
+  }
+
+  /// 复制全部识别结果（每行一条文本，跳过空行）。
+  void _copyAllResults() {
+    final text = _results.map((r) => r.text).where((t) => t.isNotEmpty).join('\n');
+    _copyToClipboard(
+      text,
+      '已复制 ${_results.length} 条结果到剪贴板',
+    );
+  }
+
   Widget _buildResultsPanel() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
-          child: Text(
-            'Recognition Results (${_results.length})',
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Recognition Results (${_results.length})',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+              ),
+              // 一键复制全部结果
+              TextButton.icon(
+                onPressed:
+                    _results.isEmpty ? null : _copyAllResults,
+                icon: const Icon(Icons.copy_all, size: 16),
+                label: const Text('Copy all',
+                    style: TextStyle(fontSize: 12)),
+              ),
+            ],
           ),
         ),
         Expanded(
@@ -635,8 +672,9 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
                             style: const TextStyle(fontSize: 11),
                           ),
                         ),
-                        // 识别文本
-                        title: Text(
+                        // 识别文本：SelectableText 支持鼠标拖选/长按选择，
+                        // 可直接框选部分内容复制
+                        title: SelectableText(
                           r.text,
                           style: const TextStyle(fontSize: 13),
                         ),
@@ -644,6 +682,13 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
                         subtitle: Text(
                           'Confidence: ${(r.confidence * 100).toStringAsFixed(1)}%',
                           style: const TextStyle(fontSize: 11),
+                        ),
+                        // 单条一键复制
+                        trailing: IconButton(
+                          icon: const Icon(Icons.copy, size: 16),
+                          tooltip: '复制此条',
+                          onPressed: () =>
+                              _copyToClipboard(r.text, '已复制第 ${index + 1} 条'),
                         ),
                       ),
                     );
