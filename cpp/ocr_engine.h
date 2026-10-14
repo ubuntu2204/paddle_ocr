@@ -7,6 +7,9 @@
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
 
+#include "ocr_options.h"
+#include "ocr_preprocess.h"
+
 namespace paddle_ocr {
 
 // 单个检测到的文本区域的 OCR 结果
@@ -25,7 +28,11 @@ class TextDetector {
   // 初始化检测器，加载 ONNX 检测模型
   bool Initialize(const std::string& model_path);
   // 对输入图像进行文本检测，返回检测到的文本区域框列表
+  // （使用内置默认参数，保留给老调用方）
   std::vector<std::vector<cv::Point>> Detect(const cv::Mat& image);
+  // 带参数检测：返回框 + DB 平均得分，供多分支合并与择优识别使用
+  std::vector<DetectedBox> DetectScored(
+      const cv::Mat& image, const DetectParams& params, int branch_index);
 
  private:
   Ort::Env env_;                 // ONNX Runtime 运行环境
@@ -33,21 +40,22 @@ class TextDetector {
   std::string input_name_ = "x";  // 模型输入节点名称
   std::string output_name_ = "save_infer_model/scale_0.tmp_1";  // 模型输出节点名称
 
-  float det_db_thresh_ = 0.3f;        // DB 二值化阈值
-  float det_db_box_thresh_ = 0.5f;    // 文本框得分阈值
-  float det_db_unclip_ratio_ = 1.5f;  // 文本框扩展比例
-  int max_side_len_ = 960;            // 输入图像最大边长（超过则缩放）
+  // 内置默认参数（等价于 kPresetStandard）；实际推理一律走 DetectParams
+  static DetectParams DefaultParams();
 
   // 图像预处理：缩放、归一化，返回处理后的 Mat 及缩放比例
-  cv::Mat Preprocess(const cv::Mat& image, float& ratio_h, float& ratio_w);
+  cv::Mat Preprocess(const cv::Mat& image, const DetectParams& params,
+                     float& ratio_h, float& ratio_w);
   // 后处理：将模型输出转换为文本框列表
-  std::vector<std::vector<cv::Point>> PostProcess(
+  std::vector<DetectedBox> PostProcess(
       const float* output, int out_h, int out_w,
-      float ratio_h, float ratio_w);
+      float ratio_h, float ratio_w, const DetectParams& params,
+      int branch_index);
   // 从预测图（概率图）和二值化掩码中提取文本框
-  std::vector<std::vector<cv::Point>> BoxesFromBitmap(
+  std::vector<DetectedBox> BoxesFromBitmap(
       const cv::Mat& pred, const cv::Mat& mask,
-      float ratio_w, float ratio_h);
+      float ratio_w, float ratio_h, const DetectParams& params,
+      int branch_index);
   // 对多边形进行扩展（Unclip），扩大文本框范围
   void Unclip(const std::vector<cv::Point>& in_poly,
               std::vector<cv::Point>& out_poly, float unclip_ratio);
@@ -70,19 +78,31 @@ class TextRecognizer {
       const cv::Mat& image,
       const std::vector<std::vector<cv::Point>>& boxes);
 
+  // 带参数的批量识别（使用 params 里的输入尺寸与文本条二次预处理配置）
+  std::vector<std::pair<std::string, float>> Recognize(
+      const cv::Mat& image,
+      const std::vector<std::vector<cv::Point>>& boxes,
+      const RecognizeParams& params);
+
+  // 识别单个区域。多分支择优识别需要对同一区域在多个图像变体上反复调用，
+  // 因此单独暴露。返回（文本, 置信度）。
+  std::pair<std::string, float> RecognizeRegion(
+      const cv::Mat& image, const std::vector<cv::Point>& box,
+      const RecognizeParams& params);
+
  private:
   Ort::Env env_;                 // ONNX Runtime 运行环境
   Ort::Session session_{nullptr};  // ONNX Runtime 推理会话
   std::string input_name_ = "x";  // 模型输入节点名称
   std::string output_name_ = "save_infer_model/scale_0.tmp_1";  // 模型输出节点名称
   std::vector<std::string> dict_;  // 识别字典（字符表）
-  int rec_img_h_ = 48;             // 识别模型输入图像高度（固定）
 
   // 加载字典文件
   bool LoadDict(const std::string& dict_path);
-  // 根据文本框从原图裁剪并对齐文本区域图像
+  // 根据文本框从原图裁剪并预处理文本区域图像（含缩放与归一化）
   cv::Mat PreprocessCrop(const cv::Mat& image,
-                         const std::vector<cv::Point>& box);
+                         const std::vector<cv::Point>& box,
+                         const RecognizeParams& params);
   // 对模型输出进行 CTC 解码，返回（文本, 平均置信度）
   std::pair<std::string, float> DecodeOutput(
       const float* data, int seq_len, int num_classes);
@@ -99,13 +119,37 @@ class OcrEngine {
                   const std::string& rec_model_path,
                   const std::string& dict_path);
 
-  // 对 cv::Mat 图像进行 OCR 识别
+  // 设置全局默认选项。设置后，不传 options 的识别接口都会用它，
+  // 宿主 App 可以「一次配置、处处生效」。
+  void SetDefaultOptions(const OcrOptions& options);
+  // 读取当前默认选项
+  const OcrOptions& GetDefaultOptions() const { return default_options_; }
+  // 清空默认选项，回到标准单分支行为
+  void ClearDefaultOptions();
+
+  // 对 cv::Mat 图像进行 OCR 识别（使用默认选项）
   std::vector<OcrBoxResult> Recognize(const cv::Mat& image);
+  // 对 cv::Mat 图像进行 OCR 识别（显式选项）
+  std::vector<OcrBoxResult> Recognize(const cv::Mat& image,
+                                       const OcrOptions& options);
   // 对图像字节数据（如 PNG/JPEG）进行 OCR 识别
   std::vector<OcrBoxResult> RecognizeFromBytes(
       const std::vector<uint8_t>& image_bytes);
+  std::vector<OcrBoxResult> RecognizeFromBytes(
+      const std::vector<uint8_t>& image_bytes, const OcrOptions& options);
   // 对图像文件进行 OCR 识别
   std::vector<OcrBoxResult> RecognizeFromFile(const std::string& image_path);
+  std::vector<OcrBoxResult> RecognizeFromFile(const std::string& image_path,
+                                               const OcrOptions& options);
+
+  // 解码图片字节为 cv::Mat；失败返回空 Mat。供上层与测试复用。
+  static cv::Mat DecodeImageBytes(const std::vector<uint8_t>& image_bytes);
+
+  // 把某一路预处理的产物单独拿出来（调试 / 宿主想自己看图时用）。
+  // branch_flag 取 BranchFlag 中的单个位；未知位返回空 Mat。
+  static cv::Mat RenderBranchPreview(const cv::Mat& image,
+                                      uint32_t branch_flag,
+                                      const OcrOptions& options);
 
   // 引擎是否已初始化
   bool IsInitialized() const { return initialized_; }
@@ -113,10 +157,33 @@ class OcrEngine {
   const std::string& GetLastError() const { return last_error_; }
 
  private:
+  // 单路检测分支的运行期产物
+  struct BranchOutput {
+    cv::Mat image;                     // 预处理后的图（识别时从这里裁剪）
+    std::vector<DetectedBox> boxes;    // 框坐标已换算回原图坐标系
+    double scale = 1.0;                // image 相对原图的缩放系数
+    uint32_t flag = 0;                 // 对应的 BranchFlag
+    std::string name;
+    bool rec_source = true;            // 能否作为识别源图（二值化类分支不行）
+  };
+
+  // 把原图坐标系下的框换算到某一路分支图坐标系
+  static std::vector<cv::Point> ScaleBoxToBranch(
+      const std::vector<cv::Point>& box, double scale);
+
+  // 完整多分支管道：预处理分支 → 检测 → 合并 → 同行拼接 → 择优识别
+  std::vector<OcrBoxResult> RunPipeline(const cv::Mat& image,
+                                         const OcrOptions& options);
+  // 单分支兼容路径（等价于历史行为）
+  std::vector<OcrBoxResult> RunSingleBranch(
+      const cv::Mat& image, const OcrOptions& options);
+
   TextDetector detector_;      // 文本检测器
   TextRecognizer recognizer_;  // 文本识别器
   bool initialized_ = false;   // 初始化状态标志
   std::string last_error_;     // 最近一次错误信息
+  OcrOptions default_options_; // 全局默认选项
+  bool has_explicit_default_ = false;  // 宿主是否调过 SetDefaultOptions
 };
 
 }  // namespace paddle_ocr

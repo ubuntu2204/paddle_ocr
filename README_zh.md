@@ -109,7 +109,7 @@ flutter run -d linux
 
 ```yaml
 dependencies:
-  pp_ocr: ^0.3.2
+  pp_ocr: ^0.4.0
 ```
 
 ## 模型文件
@@ -162,7 +162,51 @@ for (final result in results) {
 ocr.dispose();
 ```
 
-完整示例请参考 [example 应用](example/)，包含图片选择器和检测框可视化叠加。
+完整示例请参考 [example 应用](example/)，包含图片选择器、预设选择器和检测框可视化叠加。
+
+### 识别结果不全（白字压复杂背景）
+
+当一行字是**压在杂乱背景上的白字**（监控叠加字幕、路牌、低对比扫描件）时，
+单路检测容易把它碎裂成几段，并丢头丢尾。此时传入预处理选项改走多分支召回：
+
+```dart
+// 一行搞定：按场景选预设
+final results = await ocr.recognizeImage(
+  'path/to/camera_frame.png',
+  options: OcrOptions.preset(OcrPreset.surveillance),
+);
+
+// 或者 App 启动时配一次，之后不带 options 的调用全部继承
+await ocr.setDefaultOptions(OcrOptions.preset(OcrPreset.surveillance));
+
+// 只识别某个矩形内（结果坐标仍以原图为基准）
+final band = await ocr.recognizeImage(
+  'path/to/frame.png',
+  options: OcrOptions.preset(OcrPreset.surveillance).withRoi(700, 0, 350, 60),
+);
+```
+
+可用预设：`standard`（保持旧行为不变）、`document`、`lowContrast`、`surveillance`、
+`smallText`、`maxRecall`。
+
+预设只是个**起点** —— 读回来再只改你关心的字段：
+
+```dart
+final opts = OcrOptions.preset(OcrPreset.surveillance)
+    .copyWith(detThresh: 0.22, branches: {OcrBranch.raw, OcrBranch.whiteText});
+```
+
+开启多分支后，管道实际做了四件事：
+
+1. 每一路分支先做预处理（二值化 / CLAHE / 放大 / 白色字幕提取 / 放宽阈值）；
+2. 各路分别检测，再跨分支合并去重；
+3. 可选把同一行的碎框拼回整行；
+4. 每个区域在所有候选图上各识别一次，取最优结果。
+
+第 4 步很关键：PP-OCR 的 CTC 置信度极易饱和（漏了 3 个字仍报 `1.0`），所
+以“最优”是按「结果估算宽度与区域长宽比的契合度」打分——它能同时惩罚“读少了”
+和“多插字读油了”。二值化类分支**只用于检测**，拿它们的像素去喂识别器
+只会得到大量乱码。
 
 ## 架构说明
 

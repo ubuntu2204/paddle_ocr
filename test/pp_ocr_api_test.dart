@@ -21,6 +21,10 @@ class _RecorderPlatform
   String? nextPickImageResult;
   String? nextPlatformVersion;
 
+  /// 最后一次调用收到的 options，用于断言透传。
+  OcrOptions? lastOptions;
+  bool clearDefaultOptionsCalled = false;
+
   @override
   Future<bool> initialize({
     required String detModelPath,
@@ -32,15 +36,36 @@ class _RecorderPlatform
   }
 
   @override
-  Future<List<OcrResult>> recognizeImage(String imagePath) async {
+  Future<List<OcrResult>> recognizeImage(
+    String imagePath, {
+    OcrOptions? options,
+  }) async {
     calls.add('recognizeImage:$imagePath');
+    lastOptions = options;
     return nextRecognizeResult;
   }
 
   @override
-  Future<List<OcrResult>> recognizeImageBytes(Uint8List imageBytes) async {
+  Future<List<OcrResult>> recognizeImageBytes(
+    Uint8List imageBytes, {
+    OcrOptions? options,
+  }) async {
     calls.add('recognizeImageBytes:${imageBytes.length}');
+    lastOptions = options;
     return nextRecognizeResult;
+  }
+
+  @override
+  Future<bool> setDefaultOptions(OcrOptions options) async {
+    calls.add('setDefaultOptions');
+    lastOptions = options;
+    return true;
+  }
+
+  @override
+  void clearDefaultOptions() {
+    calls.add('clearDefaultOptions');
+    clearDefaultOptionsCalled = true;
   }
 
   @override
@@ -112,6 +137,51 @@ void main() {
       final ocr = PaddleOcr();
       await ocr.recognizeImageBytes(Uint8List.fromList([1, 2, 3]));
       expect(recorder.calls.single, 'recognizeImageBytes:3');
+    });
+
+    test('recognizeImage passes options through unchanged', () async {
+      const opts = OcrOptions(
+        branches: {OcrBranch.raw, OcrBranch.whiteText},
+        stitchSameLine: true,
+        detThresh: 0.26,
+      );
+      final ocr = PaddleOcr();
+      await ocr.recognizeImage('/p/2.png', options: opts);
+      expect(recorder.lastOptions, same(opts));
+      expect(recorder.lastOptions!.branches, contains(OcrBranch.whiteText));
+    });
+
+    test(
+      'recognizeImage without options passes null (engine default)',
+      () async {
+        final ocr = PaddleOcr();
+        await ocr.recognizeImage('/p/3.png');
+        expect(recorder.lastOptions, isNull);
+      },
+    );
+
+    test('recognizeImageBytes passes options through', () async {
+      final ocr = PaddleOcr();
+      await ocr.recognizeImageBytes(
+        Uint8List.fromList([9]),
+        options: const OcrOptions(branches: {OcrBranch.raw, OcrBranch.clahe}),
+      );
+      expect(
+        recorder.lastOptions!.branchMask,
+        OcrBranch.raw.bit | OcrBranch.clahe.bit,
+      );
+    });
+
+    test('setDefaultOptions / clearDefaultOptions are delegated', () async {
+      final ocr = PaddleOcr();
+      final ok = await ocr.setDefaultOptions(
+        const OcrOptions(branches: {OcrBranch.raw, OcrBranch.upscale2x}),
+      );
+      expect(ok, true);
+      expect(recorder.calls, contains('setDefaultOptions'));
+
+      ocr.clearDefaultOptions();
+      expect(recorder.clearDefaultOptionsCalled, isTrue);
     });
 
     test('pickImage null propagates', () async {

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'pp_ocr_ffi.dart';
+import 'src/ocr_options.dart';
 import 'src/ocr_result.dart';
 
 /// pp_ocr 插件的平台接口。
@@ -35,10 +36,33 @@ abstract class PaddleOcrPlatform extends PlatformInterface {
   });
 
   /// 从图片文件路径识别文字。
-  Future<List<OcrResult>> recognizeImage(String imagePath);
+  ///
+  /// [options] 为空时使用引擎级默认选项（见 [setDefaultOptions]），
+  /// 否则用给定选项跑一次多分支预处理识别。
+  Future<List<OcrResult>> recognizeImage(
+    String imagePath, {
+    OcrOptions? options,
+  });
 
   /// 从图片字节数据识别文字。
-  Future<List<OcrResult>> recognizeImageBytes(Uint8List imageBytes);
+  Future<List<OcrResult>> recognizeImageBytes(
+    Uint8List imageBytes, {
+    OcrOptions? options,
+  });
+
+  /// 设置引擎级默认选项：此后不传 options 的识别调用都会用它。
+  ///
+  /// 适合宿主 App 启动时按业务场景（监控、文档、车牌）配置一次，
+  /// 之后所有调用点保持干净。默认实现抛 [UnimplementedError]，
+  /// 由各平台实现覆盖；不支持的实现应返回 false 而不是崩溃。
+  Future<bool> setDefaultOptions(OcrOptions options) async {
+    throw UnimplementedError('setDefaultOptions() is not implemented');
+  }
+
+  /// 清除引擎级默认选项，回到标准单分支行为。
+  void clearDefaultOptions() {
+    // 默认不做任何事：不支持该能力的平台实现保持原行为即可。
+  }
 
   /// 打开文件选择对话框以选择图片，返回所选文件路径。
   Future<String?> pickImage();

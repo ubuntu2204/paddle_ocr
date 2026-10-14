@@ -6,6 +6,7 @@ import 'package:ffi/ffi.dart';
 
 import 'paddle_ocr_method_channel.dart';
 import 'paddle_ocr_platform_interface.dart';
+import 'src/ocr_options.dart';
 import 'src/ocr_result.dart';
 import 'src/pp_ocr_ffi_bindings.dart';
 
@@ -80,18 +81,31 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
   }
 
   @override
-  Future<List<OcrResult>> recognizeImage(String imagePath) async {
+  Future<List<OcrResult>> recognizeImage(
+    String imagePath, {
+    OcrOptions? options,
+  }) async {
     if (!_ffiAvailable) {
-      return _getImpl().recognizeImage(imagePath);
+      return _getImpl().recognizeImage(imagePath, options: options);
     }
     _ensureEngine();
     if (_engine == null || _engine == nullptr) {
-      return _getImpl().recognizeImage(imagePath);
+      return _getImpl().recognizeImage(imagePath, options: options);
     }
 
     final engine = _engine!;
     final bindings = PpOcrFfiBindings.instance;
-    final resultC = bindings.recognizeFile(engine, imagePath);
+    final PpOcrResultArrayC resultC;
+    if (options == null) {
+      resultC = bindings.recognizeFile(engine, imagePath);
+    } else {
+      final optsPtr = options.toNativeStruct();
+      try {
+        resultC = bindings.recognizeFileEx(engine, imagePath, optsPtr);
+      } finally {
+        calloc.free(optsPtr);
+      }
+    }
 
     if (resultC.error != nullptr) {
       final err = resultC.error.toDartString();
@@ -102,18 +116,31 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
   }
 
   @override
-  Future<List<OcrResult>> recognizeImageBytes(Uint8List imageBytes) async {
+  Future<List<OcrResult>> recognizeImageBytes(
+    Uint8List imageBytes, {
+    OcrOptions? options,
+  }) async {
     if (!_ffiAvailable) {
-      return _getImpl().recognizeImageBytes(imageBytes);
+      return _getImpl().recognizeImageBytes(imageBytes, options: options);
     }
     _ensureEngine();
     if (_engine == null || _engine == nullptr) {
-      return _getImpl().recognizeImageBytes(imageBytes);
+      return _getImpl().recognizeImageBytes(imageBytes, options: options);
     }
 
     final engine = _engine!;
     final bindings = PpOcrFfiBindings.instance;
-    final resultC = bindings.recognizeBytes(engine, imageBytes);
+    final PpOcrResultArrayC resultC;
+    if (options == null) {
+      resultC = bindings.recognizeBytes(engine, imageBytes);
+    } else {
+      final optsPtr = options.toNativeStruct();
+      try {
+        resultC = bindings.recognizeBytesEx(engine, imageBytes, optsPtr);
+      } finally {
+        calloc.free(optsPtr);
+      }
+    }
 
     if (resultC.error != nullptr) {
       final err = resultC.error.toDartString();
@@ -121,6 +148,43 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     }
 
     return _parseResultsC(resultC);
+  }
+
+  /// 把选项设为引擎级默认。
+  @override
+  Future<bool> setDefaultOptions(OcrOptions options) async {
+    _ensureEngine();
+    if (!_ffiAvailable || _engine == null || _engine == nullptr) {
+      return _getImpl().setDefaultOptions(options);
+    }
+    final bindings = PpOcrFfiBindings.instance;
+    final optsPtr = options.toNativeStruct();
+    try {
+      final ok = bindings.setDefaultOptions(_engine!, optsPtr);
+      if (!ok) {
+        // ignore: avoid_print
+        print(
+          '[pp_ocr] setDefaultOptions failed: '
+          '${bindings.getLastError(_engine!)}',
+        );
+      }
+      return ok;
+    } finally {
+      calloc.free(optsPtr);
+    }
+  }
+
+  @override
+  void clearDefaultOptions() {
+    if (!_ffiAvailable || _engine == null || _engine == nullptr) {
+      _getImpl().clearDefaultOptions();
+      return;
+    }
+    try {
+      PpOcrFfiBindings.instance.clearDefaultOptions(_engine!);
+    } catch (_) {
+      // 旧版原生库没有这个符号，忽略即可。
+    }
   }
 
   /// 对于需要 Flutter 插件注册器的功能（例如原生文件对话框），

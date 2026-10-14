@@ -27,11 +27,18 @@
 ///   print('${r.text} (${r.confidence})');
 /// }
 ///
+/// // 白字压复杂背景（监控叠加字幕等）识别不全时，交给预处理多分支召回
+/// final full = await ocr.recognizeImage(
+///   r'C:\images\camera.png',
+///   options: OcrOptions.preset(OcrPreset.surveillance),
+/// );
+///
 /// // 使用完毕后记得释放资源
 /// ocr.dispose();
 /// ```
 library;
 
+export 'src/ocr_options.dart';
 export 'src/ocr_result.dart';
 export 'paddle_ocr_platform_interface.dart' show PaddleOcrPlatform;
 
@@ -39,6 +46,7 @@ import 'dart:typed_data';
 
 import 'paddle_ocr_platform_interface.dart';
 import 'pp_ocr_ffi.dart';
+import 'src/ocr_options.dart';
 import 'src/ocr_result.dart';
 
 /// PP-OCR 插件的主入口类。
@@ -78,19 +86,52 @@ class PaddleOcr {
   /// 从图片文件识别文字。
   ///
   /// [imagePath]：图片文件的绝对路径（支持 png、jpg、bmp、tiff）。
+  /// [options]：预处理与多分支识别选项。为空时用引擎级默认选项
+  /// （见 [setDefaultOptions]），再空则用标准单分支行为。
   ///
   /// 返回 [OcrResult] 列表，每个检测结果对应一个文字区域。
-  Future<List<OcrResult>> recognizeImage(String imagePath) {
-    return _impl.recognizeImage(imagePath);
+  Future<List<OcrResult>> recognizeImage(
+    String imagePath, {
+    OcrOptions? options,
+  }) {
+    return _impl.recognizeImage(imagePath, options: options);
   }
 
   /// 从图片字节数据识别文字。
   ///
   /// [imageBytes]：图片文件的原始字节数据。
+  /// [options]：见 [recognizeImage]。
   ///
   /// 返回 [OcrResult] 列表，每个检测结果对应一个文字区域。
-  Future<List<OcrResult>> recognizeImageBytes(Uint8List imageBytes) {
-    return _impl.recognizeImageBytes(imageBytes);
+  Future<List<OcrResult>> recognizeImageBytes(
+    Uint8List imageBytes, {
+    OcrOptions? options,
+  }) {
+    return _impl.recognizeImageBytes(imageBytes, options: options);
+  }
+
+  /// 按预设识别图片文件。
+  ///
+  /// [preset]：场景预设，取值由原生侧定义，例如监控画面用
+  /// [OcrPreset.surveillance]。
+  Future<List<OcrResult>> recognizeImageWithPreset(
+    String imagePath,
+    OcrPreset preset,
+  ) {
+    return _impl.recognizeImage(imagePath, options: OcrOptions.preset(preset));
+  }
+
+  /// 设置引擎级默认选项。
+  ///
+  /// 适合 App 启动时按业务场景配置一次，之后所有 `recognizeXxx` 调用
+  /// 都不用再传 options。返回 `true` 表示设置成功。
+  Future<bool> setDefaultOptions(OcrOptions options) {
+    return _impl.setDefaultOptions(options);
+  }
+
+  /// 清除引擎级默认选项，回到标准单分支行为。
+  void clearDefaultOptions() {
+    _impl.clearDefaultOptions();
   }
 
   /// 打开原生文件选择对话框以选择图片。

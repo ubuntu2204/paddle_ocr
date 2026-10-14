@@ -115,7 +115,7 @@ Add this to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  pp_ocr: ^0.3.2
+  pp_ocr: ^0.4.0
 ```
 
 ## Model Files
@@ -170,7 +170,56 @@ for (final result in results) {
 ocr.dispose();
 ```
 
-See the [example app](example/) for a complete demo with image picker and visual box overlay.
+### Recognizing text that comes out incomplete
+
+If a line is rendered as **white text over a busy background** (surveillance overlay
+captions, road signs, low-contrast scans), the single-pass detector tends to break it
+into fragments and drop the head or tail of the line. Pass preprocessing options to
+run multi-branch recall instead:
+
+```dart
+// One-liner: pick the scenario preset
+final results = await ocr.recognizeImage(
+  'path/to/camera_frame.png',
+  options: OcrOptions.preset(OcrPreset.surveillance),
+);
+
+// Or set it once at app start; every call without `options:` inherits it
+await ocr.setDefaultOptions(OcrOptions.preset(OcrPreset.surveillance));
+
+// Recognize only inside a region (coordinates stay in original-image space)
+final band = await ocr.recognizeImage(
+  'path/to/frame.png',
+  options: OcrOptions.preset(OcrPreset.surveillance).withRoi(700, 0, 350, 60),
+);
+```
+
+Presets: `standard` (unchanged legacy behaviour), `document`, `lowContrast`,
+`surveillance`, `smallText`, `maxRecall`.
+
+Each preset is a *starting point* — read it back and override only what you care about:
+
+```dart
+final opts = OcrOptions.preset(OcrPreset.surveillance)
+    .copyWith(detThresh: 0.22, branches: {OcrBranch.raw, OcrBranch.whiteText});
+```
+
+What the pipeline does when several branches are enabled:
+
+1. preprocess the image once per branch (binarize / CLAHE / upscale / white-caption
+   extraction / looser thresholds);
+2. detect on each, then merge duplicate regions across branches;
+3. optionally stitch collinear fragments back into a full line;
+4. recognize each region on every candidate image and keep the best reading.
+
+Step 4 matters: PP-OCR's CTC confidence saturates (a reading missing three characters
+still reports `1.0`), so "best" is scored by how well the result's estimated width fits
+the region's aspect ratio — which penalises both under-reading and padded garbage.
+Binarised branch images are used for **detection only**; feeding them to the recognizer
+produces mostly gibberish.
+
+See the [example app](example/) for a complete demo with image picker, preset
+selector and visual box overlay.
 
 ## Architecture
 

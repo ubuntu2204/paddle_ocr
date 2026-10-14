@@ -44,6 +44,53 @@ std::string GetArgString(FlValue* args, const char* key) {
   return s ? std::string(s) : std::string();
 }
 
+// 从 FlValue map 中读取一个数值。当前 Flutter Linux embedder 的 FlValue
+// 只有两种数值类型：FL_VALUE_TYPE_INT（int64）与 FL_VALUE_TYPE_FLOAT
+// （double），Dart 侧的 int / double 分别落到这两类上。
+double GetArgNumber(FlValue* args, const char* key, double fallback) {
+  if (!args || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) return fallback;
+  g_autoptr(FlValue) key_val = fl_value_new_string(key);
+  FlValue* v = fl_value_lookup(args, key_val);
+  if (!v) return fallback;
+  switch (fl_value_get_type(v)) {
+    case FL_VALUE_TYPE_INT:
+      return static_cast<double>(fl_value_get_int(v));
+    case FL_VALUE_TYPE_FLOAT:
+      return fl_value_get_float(v);
+    case FL_VALUE_TYPE_BOOL:
+      return fl_value_get_bool(v) ? 1.0 : 0.0;
+    default:
+      return fallback;
+  }
+}
+
+// 取 args[key] 的子 map；不存在或类型不对返回 nullptr。
+FlValue* GetArgMap(FlValue* args, const char* key) {
+  if (!args || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) return nullptr;
+  g_autoptr(FlValue) key_val = fl_value_new_string(key);
+  FlValue* v = fl_value_lookup(args, key_val);
+  if (!v || fl_value_get_type(v) != FL_VALUE_TYPE_MAP) return nullptr;
+  return v;
+}
+
+// 把 Dart 传来的 options map 还原成 OcrOptions。
+// 字段名单在 paddle_ocr::OptionsFromMapLookup 里只维护一份，
+// 本文件只提供「按 key 取数」的适配。
+bool ParseOptionsArg(FlValue* options_map, paddle_ocr::OcrOptions* out) {
+  if (!options_map || !out) return false;
+  *out = paddle_ocr::OptionsFromMapLookup(paddle_ocr::MapLookup{
+      [options_map](const char* key, double fallback) {
+        return GetArgNumber(options_map, key, fallback);
+      },
+      [options_map](const char* key, int32_t fallback) {
+        const double v = GetArgNumber(options_map, key,
+                                      static_cast<double>(fallback));
+        return static_cast<int32_t>(v);
+      },
+  });
+  return true;
+}
+
 // 将 OcrBoxResult 列表编码为 FlValue 列表（每项是 { box, text, confidence }）。
 // 返回的 FlValue 由调用方负责释放（g_autoptr）。
 // 注意：Flutter Linux 的 FlValue API 使用 fl_value_new_float 表示 double，
@@ -337,7 +384,16 @@ void HandleMethodCall(FlMethodChannel* /*channel*/, FlMethodCall* method_call,
       return;
     }
     OCR_LOG("recognizeImage: path='%s'", path.c_str());
-    auto results = state->engine->RecognizeFromFile(path);
+    std::vector<paddle_ocr::OcrBoxResult> results;
+    paddle_ocr::OcrOptions options;
+    if (ParseOptionsArg(GetArgMap(args, "options"), &options)) {
+      OCR_LOG("recognizeImage: with options branches=%s stitch=%d",
+              paddle_ocr::BranchFlagsName(options.merge.branches).c_str(),
+              options.merge.stitch_same_line);
+      results = state->engine->RecognizeFromFile(path, options);
+    } else {
+      results = state->engine->RecognizeFromFile(path);
+    }
     respond_results(results);
     return;
   }
@@ -362,8 +418,33 @@ void HandleMethodCall(FlMethodChannel* /*channel*/, FlMethodCall* method_call,
     const uint8_t* data = fl_value_get_uint8_list(v_bytes);
     std::vector<uint8_t> bytes(data, data + len);
     OCR_LOG("recognizeImageBytes: %zu bytes", bytes.size());
-    auto results = state->engine->RecognizeFromBytes(bytes);
+    std::vector<paddle_ocr::OcrBoxResult> results;
+    paddle_ocr::OcrOptions options;
+    if (ParseOptionsArg(GetArgMap(args, "options"), &options)) {
+      OCR_LOG("recognizeImageBytes: with options branches=%s",
+              paddle_ocr::BranchFlagsName(options.merge.branches).c_str());
+      results = state->engine->RecognizeFromBytes(bytes, options);
+    } else {
+      results = state->engine->RecognizeFromBytes(bytes);
+    }
     respond_results(results);
+    return;
+  }
+
+  if (g_strcmp0(method, "setDefaultOptions") == 0) {
+    paddle_ocr::OcrOptions options;
+    if (!ParseOptionsArg(GetArgMap(args, "options"), &options)) {
+      respond_error("INVALID_ARGS", "options map is required");
+      return;
+    }
+    state->engine->SetDefaultOptions(options);
+    respond_bool(true);
+    return;
+  }
+
+  if (g_strcmp0(method, "clearDefaultOptions") == 0) {
+    state->engine->ClearDefaultOptions();
+    respond_bool(true);
     return;
   }
 

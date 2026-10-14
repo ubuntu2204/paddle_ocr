@@ -23,11 +23,22 @@ class MockPaddleOcrPlatform
   }) => Future.value(true);
 
   @override
-  Future<List<OcrResult>> recognizeImage(String imagePath) => Future.value([]);
+  Future<List<OcrResult>> recognizeImage(
+    String imagePath, {
+    OcrOptions? options,
+  }) => Future.value([]);
 
   @override
-  Future<List<OcrResult>> recognizeImageBytes(Uint8List imageBytes) =>
-      Future.value([]);
+  Future<List<OcrResult>> recognizeImageBytes(
+    Uint8List imageBytes, {
+    OcrOptions? options,
+  }) => Future.value([]);
+
+  @override
+  Future<bool> setDefaultOptions(OcrOptions options) async => true;
+
+  @override
+  void clearDefaultOptions() {}
 
   @override
   Future<String?> pickImage() => Future.value(null);
@@ -147,11 +158,22 @@ class _ExtendsPlatform extends PaddleOcrPlatform {
   }) => Future.value(true);
 
   @override
-  Future<List<OcrResult>> recognizeImage(String imagePath) => Future.value([]);
+  Future<List<OcrResult>> recognizeImage(
+    String imagePath, {
+    OcrOptions? options,
+  }) => Future.value([]);
 
   @override
-  Future<List<OcrResult>> recognizeImageBytes(Uint8List imageBytes) =>
-      Future.value([]);
+  Future<List<OcrResult>> recognizeImageBytes(
+    Uint8List imageBytes, {
+    OcrOptions? options,
+  }) => Future.value([]);
+
+  @override
+  Future<bool> setDefaultOptions(OcrOptions options) async => true;
+
+  @override
+  void clearDefaultOptions() {}
 
   @override
   Future<String?> pickImage() => Future.value(null);

@@ -11,7 +11,10 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <variant>
 #include <vector>
+
+#include "ocr_options.h"
 
 namespace paddle_ocr {
 
@@ -110,6 +113,45 @@ static flutter::EncodableValue ResultsToEncodable(
   return flutter::EncodableValue(list);
 }
 
+// 辅助函数：从 EncodableMap 里按 key 取一个数值。
+// Dart 侧的 int 会按大小编成 int32_t / int64_t，double 编成 double，
+// 这里统一收拢；取不到时返回 fallback。
+static double GetNumber(const flutter::EncodableMap& map, const char* key,
+                        double fallback) {
+  auto it = map.find(flutter::EncodableValue(key));
+  if (it == map.end()) return fallback;
+  const flutter::EncodableValue& v = it->second;
+  if (const auto* d = std::get_if<double>(&v)) return *d;
+  if (const auto* i = std::get_if<int32_t>(&v)) return static_cast<double>(*i);
+  if (const auto* l = std::get_if<int64_t>(&v)) return static_cast<double>(*l);
+  if (const auto* b = std::get_if<bool>(&v)) return *b ? 1.0 : 0.0;
+  return fallback;
+}
+
+// 取 args[key] 的子 map；不存在或类型不对返回 nullptr。
+static const flutter::EncodableMap* GetSubMap(const flutter::EncodableMap& args,
+                                              const char* key) {
+  auto it = args.find(flutter::EncodableValue(key));
+  if (it == args.end()) return nullptr;
+  return std::get_if<flutter::EncodableMap>(&it->second);
+}
+
+// 把 Dart 传来的 options map 还原成 OcrOptions。字段名单在
+// paddle_ocr::OptionsFromMapLookup 里只维护一份，本文件只做类型适配。
+static bool ParseOptionsArg(const flutter::EncodableMap* options_map,
+                            OcrOptions* out) {
+  if (!options_map || !out) return false;
+  const flutter::EncodableMap& m = *options_map;
+  *out = OptionsFromMapLookup(MapLookup{
+      [&m](const char* key, double fallback) { return GetNumber(m, key, fallback); },
+      [&m](const char* key, int32_t fallback) {
+        return static_cast<int32_t>(
+            GetNumber(m, key, static_cast<double>(fallback)));
+      },
+  });
+  return true;
+}
+
 // 处理来自 Dart 侧的 MethodChannel 方法调用
 void PaddleOcrPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue> &method_call,
@@ -206,7 +248,16 @@ void PaddleOcrPlugin::HandleMethodCall(
       return;
     }
 
-    auto results = ocr_engine_->RecognizeFromFile(image_path);
+    std::vector<OcrBoxResult> results;
+    OcrOptions options;
+    if (ParseOptionsArg(GetSubMap(*args, "options"), &options)) {
+      OCR_LOG("recognizeImage: with options branches=%s stitch=%d",
+              BranchFlagsName(options.merge.branches).c_str(),
+              options.merge.stitch_same_line);
+      results = ocr_engine_->RecognizeFromFile(image_path, options);
+    } else {
+      results = ocr_engine_->RecognizeFromFile(image_path);
+    }
     OCR_LOG("recognizeImage: got %zu results, sending to Flutter",
             results.size());
     result->Success(ResultsToEncodable(results));
@@ -238,10 +289,32 @@ void PaddleOcrPlugin::HandleMethodCall(
     OCR_LOG("recognizeImageBytes: received %zu bytes",
             encodable_bytes.size());
 
-    auto results = ocr_engine_->RecognizeFromBytes(encodable_bytes);
+    std::vector<OcrBoxResult> results;
+    OcrOptions options;
+    if (ParseOptionsArg(GetSubMap(*args, "options"), &options)) {
+      OCR_LOG("recognizeImageBytes: with options branches=%s",
+              BranchFlagsName(options.merge.branches).c_str());
+      results = ocr_engine_->RecognizeFromBytes(encodable_bytes, options);
+    } else {
+      results = ocr_engine_->RecognizeFromBytes(encodable_bytes);
+    }
     OCR_LOG("recognizeImageBytes: got %zu results, sending to Flutter",
             results.size());
     result->Success(ResultsToEncodable(results));
+
+  } else if (method_call.method_name().compare("setDefaultOptions") == 0) {
+    // 设置引擎级默认选项：此后不带 options 的识别调用都会用它
+    OcrOptions options;
+    if (!args || !ParseOptionsArg(GetSubMap(*args, "options"), &options)) {
+      result->Error("INVALID_ARGS", "options map is required");
+      return;
+    }
+    ocr_engine_->SetDefaultOptions(options);
+    result->Success(flutter::EncodableValue(true));
+
+  } else if (method_call.method_name().compare("clearDefaultOptions") == 0) {
+    ocr_engine_->ClearDefaultOptions();
+    result->Success(flutter::EncodableValue(true));
 
   } else if (method_call.method_name().compare("pickImage") == 0) {
     // 处理 pickImage 方法：打开 Windows 文件选择对话框

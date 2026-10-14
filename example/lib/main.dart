@@ -8,7 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:pp_ocr/pp_ocr.dart';
 
 /// 应用版本号（与根 pubspec.yaml 的 version 保持同步）。
-const String kAppVersion = '0.3.2';
+const String kAppVersion = '0.4.0';
 
 /// 应用程序入口函数
 void main() {
@@ -93,6 +93,18 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   // 与 kAppVersion 对照可发现 Dart 包与原生库版本错配（如部署残留旧 DLL）。
   String? _backendInfo;
 
+  /// 当前选中的识别预设。
+  ///
+  /// [OcrPreset.standard] 等价于不传任何选项的历史行为；选
+  /// [OcrPreset.surveillance] 可以拿它验证「白字压复杂背景识别不全」的修复。
+  OcrPreset _preset = OcrPreset.standard;
+
+  /// 按当前选择构造识别选项。
+  ///
+  /// 选 standard 时返回 null，让调用走引擎默认路径（与旧版逐字一致）。
+  OcrOptions? _optionsForPreset() =>
+      _preset == OcrPreset.standard ? null : OcrOptions.preset(_preset);
+
   @override
   void initState() {
     super.initState();
@@ -137,6 +149,30 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
     // 调用”的完整时序（需搭配 PP_OCR_PICKIMAGE_FAKE_PATH）。默认不开启，
     // 避免 dialog 阻塞无 X server 的环境。
     final viaPick = Platform.environment['PP_OCR_SELFTEST_VIA_PICK'] == '1';
+
+    // 可选：指定用哪个预设跑 self-test，验证预处理接口的效果。
+    //   PP_OCR_SELFTEST_PRESET=surveillance
+    // 不设置时走引擎默认（标准单分支），与旧版行为一致。
+    final presetName = Platform.environment['PP_OCR_SELFTEST_PRESET'];
+    OcrOptions? selfTestOptions;
+    if (presetName != null && presetName.isNotEmpty) {
+      final matched = OcrPreset.values
+          .where((p) => p.name == presetName)
+          .toList();
+      if (matched.isEmpty) {
+        // ignore: avoid_print
+        print(
+          '[SELFTEST] unknown PP_OCR_SELFTEST_PRESET="$presetName", '
+          'available: ${OcrPreset.values.map((p) => p.name).join(', ')}',
+        );
+      } else {
+        _preset = matched.first;
+        selfTestOptions = _optionsForPreset();
+        // ignore: avoid_print
+        print('[SELFTEST] preset=$presetName options=$selfTestOptions');
+      }
+    }
+
     try {
       if (viaPick) {
         // ignore: avoid_print
@@ -172,13 +208,24 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
 
       // ignore: avoid_print
       print('[SELFTEST] step 4: _ocr.recognizeImage');
-      final results = await _ocr.recognizeImage(path);
+      final results = await _ocr.recognizeImage(path, options: selfTestOptions);
+      // 把每行结果打出来，方便直接对比不同预设的识别完整度
+      for (var i = 0; i < results.length; i++) {
+        // ignore: avoid_print
+        print(
+          '[SELFTEST]   [$i] conf=${results[i].confidence.toStringAsFixed(3)}'
+          ' "${results[i].text}"',
+        );
+      }
       // ignore: avoid_print
       print('[SELFTEST] step 4 done: ${results.length} results');
 
       // ignore: avoid_print
       print('[SELFTEST] step 5: _ocr.recognizeImageBytes');
-      final results2 = await _ocr.recognizeImageBytes(bytes);
+      final results2 = await _ocr.recognizeImageBytes(
+        bytes,
+        options: selfTestOptions,
+      );
       // ignore: avoid_print
       print('[SELFTEST] step 5 done: ${results2.length} results');
 
@@ -344,8 +391,11 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
 
       // ignore: avoid_print
       print('[PICK] step D: _ocr.recognizeImage');
-      // 执行 OCR 识别
-      final results = await _ocr.recognizeImage(path);
+      // 执行 OCR 识别（按界面上选的预设传预处理选项）
+      final results = await _ocr.recognizeImage(
+        path,
+        options: _optionsForPreset(),
+      );
       // ignore: avoid_print
       print('[PICK] step D done: ${results.length} results');
 
@@ -444,14 +494,18 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
                   SelectableText(
                     _infoLine,
                     style: const TextStyle(
-                        fontSize: 12, fontFamily: 'monospace'),
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    ),
                   ),
                   if (_statusMessage != null) ...[
                     const SizedBox(height: 4),
                     SelectableText(
                       _statusMessage!,
                       style: const TextStyle(
-                          fontSize: 12, fontFamily: 'monospace'),
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                      ),
                     ),
                   ],
                 ],
@@ -530,6 +584,44 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
                       )
                     : const Icon(Icons.settings),
                 label: Text(_initialized ? 'Re-init' : 'Initialize'),
+              ),
+              const SizedBox(width: 8),
+              // 识别预设下拉：演示预处理 / 多分支召回接口
+              DropdownButton<OcrPreset>(
+                value: _preset,
+                hint: const Text('Preset'),
+                style: const TextStyle(fontSize: 12, color: Colors.black87),
+                underline: const SizedBox.shrink(),
+                items: const [
+                  DropdownMenuItem(
+                    value: OcrPreset.standard,
+                    child: Text('standard（旧行为）'),
+                  ),
+                  DropdownMenuItem(
+                    value: OcrPreset.document,
+                    child: Text('document（文档/截图）'),
+                  ),
+                  DropdownMenuItem(
+                    value: OcrPreset.lowContrast,
+                    child: Text('lowContrast（低对比）'),
+                  ),
+                  DropdownMenuItem(
+                    value: OcrPreset.surveillance,
+                    child: Text('surveillance（监控字幕）'),
+                  ),
+                  DropdownMenuItem(
+                    value: OcrPreset.smallText,
+                    child: Text('smallText（小字放大）'),
+                  ),
+                  DropdownMenuItem(
+                    value: OcrPreset.maxRecall,
+                    child: Text('maxRecall（最全最慢）'),
+                  ),
+                ],
+                onChanged: (p) {
+                  if (p == null) return;
+                  setState(() => _preset = p);
+                },
               ),
               const SizedBox(width: 8),
               // 选择图片并识别按钮（仅在已初始化且非加载状态时可用）
@@ -614,11 +706,11 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
 
   /// 复制全部识别结果（每行一条文本，跳过空行）。
   void _copyAllResults() {
-    final text = _results.map((r) => r.text).where((t) => t.isNotEmpty).join('\n');
-    _copyToClipboard(
-      text,
-      '已复制 ${_results.length} 条结果到剪贴板',
-    );
+    final text = _results
+        .map((r) => r.text)
+        .where((t) => t.isNotEmpty)
+        .join('\n');
+    _copyToClipboard(text, '已复制 ${_results.length} 条结果到剪贴板');
   }
 
   Widget _buildResultsPanel() {
@@ -633,16 +725,16 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
                 child: Text(
                   'Recognition Results (${_results.length})',
                   style: const TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 14),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
                 ),
               ),
               // 一键复制全部结果
               TextButton.icon(
-                onPressed:
-                    _results.isEmpty ? null : _copyAllResults,
+                onPressed: _results.isEmpty ? null : _copyAllResults,
                 icon: const Icon(Icons.copy_all, size: 16),
-                label: const Text('Copy all',
-                    style: TextStyle(fontSize: 12)),
+                label: const Text('Copy all', style: TextStyle(fontSize: 12)),
               ),
             ],
           ),
@@ -745,8 +837,7 @@ class OcrBoxPainter extends CustomPainter {
     // 否则小图会被此公式"虚拟放大"，框整体溢出图片显示区（画框错位 bug）。
     final double scaleX = size.width / imageWidth;
     final double scaleY = size.height / imageHeight;
-    final double scale =
-        math.min(1.0, math.min(scaleX, scaleY));
+    final double scale = math.min(1.0, math.min(scaleX, scaleY));
 
     // 实际显示的图片尺寸（宽高比不同时会出现留白）
     final double displayedW = imageWidth * scale;

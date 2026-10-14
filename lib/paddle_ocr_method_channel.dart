@@ -1,7 +1,9 @@
 import 'dart:developer' as developer;
+
 import 'package:flutter/services.dart';
 
 import 'paddle_ocr_platform_interface.dart';
+import 'src/ocr_options.dart';
 import 'src/ocr_result.dart';
 
 /// [PaddleOcrPlatform] 的 MethodChannel 实现。
@@ -13,7 +15,12 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
   ///
   /// 同时通过 [developer.log] 和 [print] 输出，便于在控制台中查看。
   void _log(String message, {Object? error, StackTrace? stackTrace}) {
-    developer.log(message, name: 'PaddleOcr', error: error, stackTrace: stackTrace);
+    developer.log(
+      message,
+      name: 'PaddleOcr',
+      error: error,
+      stackTrace: stackTrace,
+    );
     // 同时打印到控制台，便于直观查看
     // ignore: avoid_print
     print('[PaddleOcr] $message');
@@ -42,8 +49,10 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
       _log('initialize: native returned result=$result');
       return result ?? false;
     } on PlatformException catch (e) {
-      _log('initialize: PlatformException code=${e.code} message=${e.message} '
-          'details=${e.details}');
+      _log(
+        'initialize: PlatformException code=${e.code} message=${e.message} '
+        'details=${e.details}',
+      );
       rethrow;
     } catch (e, st) {
       _log('initialize: unexpected error', error: e, stackTrace: st);
@@ -52,25 +61,41 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
   }
 
   @override
-  Future<List<OcrResult>> recognizeImage(String imagePath) async {
+  Future<List<OcrResult>> recognizeImage(
+    String imagePath, {
+    OcrOptions? options,
+  }) async {
     _log('recognizeImage: imagePath="$imagePath"');
     _log('recognizeImage: path codeUnits=${imagePath.codeUnits}');
+    if (options != null) _log('recognizeImage: options=$options');
 
     try {
-      final result = await _channel.invokeMethod<List<dynamic>>('recognizeImage', {
-        'imagePath': imagePath,
-      });
+      final result = await _channel.invokeMethod<List<dynamic>>(
+        'recognizeImage',
+        <String, Object>{
+          'imagePath': imagePath,
+          if (options != null) 'options': options.toMap(),
+        },
+      );
       _log('recognizeImage: native returned ${result?.length ?? 0} items');
       if (result == null) return [];
       return _parseResults(result);
     } on FormatException catch (e) {
-      _log('recognizeImage: FormatException! offset=${e.offset} message=${e.message}');
-      _log('recognizeImage: This usually means native code returned invalid UTF-8 bytes.');
-      _log('recognizeImage: Check the native stderr log for hex dumps of the data.');
+      _log(
+        'recognizeImage: FormatException! offset=${e.offset} message=${e.message}',
+      );
+      _log(
+        'recognizeImage: This usually means native code returned invalid UTF-8 bytes.',
+      );
+      _log(
+        'recognizeImage: Check the native stderr log for hex dumps of the data.',
+      );
       rethrow;
     } on PlatformException catch (e) {
-      _log('recognizeImage: PlatformException code=${e.code} message=${e.message} '
-          'details=${e.details}');
+      _log(
+        'recognizeImage: PlatformException code=${e.code} message=${e.message} '
+        'details=${e.details}',
+      );
       rethrow;
     } catch (e, st) {
       _log('recognizeImage: unexpected error', error: e, stackTrace: st);
@@ -79,23 +104,36 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
   }
 
   @override
-  Future<List<OcrResult>> recognizeImageBytes(Uint8List imageBytes) async {
+  Future<List<OcrResult>> recognizeImageBytes(
+    Uint8List imageBytes, {
+    OcrOptions? options,
+  }) async {
     _log('recognizeImageBytes: ${imageBytes.length} bytes');
+    if (options != null) _log('recognizeImageBytes: options=$options');
 
     try {
-      final result =
-          await _channel.invokeMethod<List<dynamic>>('recognizeImageBytes', {
-        'imageBytes': imageBytes,
-      });
+      final result = await _channel.invokeMethod<List<dynamic>>(
+        'recognizeImageBytes',
+        {
+          'imageBytes': imageBytes,
+          if (options != null) 'options': options.toMap(),
+        },
+      );
       _log('recognizeImageBytes: native returned ${result?.length ?? 0} items');
       if (result == null) return [];
       return _parseResults(result);
     } on FormatException catch (e) {
-      _log('recognizeImageBytes: FormatException! offset=${e.offset} message=${e.message}');
-      _log('recognizeImageBytes: This usually means native code returned invalid UTF-8 bytes.');
+      _log(
+        'recognizeImageBytes: FormatException! offset=${e.offset} message=${e.message}',
+      );
+      _log(
+        'recognizeImageBytes: This usually means native code returned invalid UTF-8 bytes.',
+      );
       rethrow;
     } on PlatformException catch (e) {
-      _log('recognizeImageBytes: PlatformException code=${e.code} message=${e.message}');
+      _log(
+        'recognizeImageBytes: PlatformException code=${e.code} message=${e.message}',
+      );
       rethrow;
     } catch (e, st) {
       _log('recognizeImageBytes: unexpected error', error: e, stackTrace: st);
@@ -116,7 +154,9 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
         _log('_parseResults: item[$i] keys=$keys');
 
         final text = map['text'];
-        _log('_parseResults: item[$i] text type=${text.runtimeType} value="$text"');
+        _log(
+          '_parseResults: item[$i] text type=${text.runtimeType} value="$text"',
+        );
 
         if (text is String) {
           _log('_parseResults: item[$i] text codeUnits=${text.codeUnits}');
@@ -126,14 +166,18 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
         _log('_parseResults: item[$i] parsed OK: $result');
         results.add(result);
       } on FormatException catch (e) {
-        _log('_parseResults: FormatException at item[$i]! offset=${e.offset} '
-            'message=${e.message}');
+        _log(
+          '_parseResults: FormatException at item[$i]! offset=${e.offset} '
+          'message=${e.message}',
+        );
         // 记录原始项数据，便于调试
         if (item is Map) {
           final text = item['text'];
           if (text is String) {
-            _log('_parseResults: item[$i] text had invalid encoding. '
-                'codeUnits=${text.codeUnits}');
+            _log(
+              '_parseResults: item[$i] text had invalid encoding. '
+              'codeUnits=${text.codeUnits}',
+            );
           }
         }
         rethrow;
@@ -143,6 +187,33 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
       }
     }
     return results;
+  }
+
+  @override
+  Future<bool> setDefaultOptions(OcrOptions options) async {
+    _log('setDefaultOptions: $options');
+    try {
+      final ok = await _channel.invokeMethod<bool>(
+        'setDefaultOptions',
+        <String, Object>{'options': options.toMap()},
+      );
+      return ok ?? false;
+    } on PlatformException catch (e) {
+      _log(
+        'setDefaultOptions: PlatformException code=${e.code} '
+        'message=${e.message}',
+      );
+      rethrow;
+    }
+  }
+
+  @override
+  void clearDefaultOptions() {
+    _log('clearDefaultOptions: calling native');
+    // fire-and-forget：返回值的 future 不需要等，失败也不影响后续调用。
+    _channel
+        .invokeMethod<bool>('clearDefaultOptions')
+        .catchError((Object e) => false);
   }
 
   @override
@@ -156,9 +227,13 @@ class MethodChannelPaddleOcr extends PaddleOcrPlatform {
       }
       return path;
     } on FormatException catch (e) {
-      _log('pickImage: FormatException! offset=${e.offset} message=${e.message}');
+      _log(
+        'pickImage: FormatException! offset=${e.offset} message=${e.message}',
+      );
       _log('pickImage: This means the file path contains non-UTF-8 bytes.');
-      _log('pickImage: The native picker should use GetOpenFileNameW and convert to UTF-8.');
+      _log(
+        'pickImage: The native picker should use GetOpenFileNameW and convert to UTF-8.',
+      );
       rethrow;
     } on PlatformException catch (e) {
       _log('pickImage: PlatformException code=${e.code} message=${e.message}');

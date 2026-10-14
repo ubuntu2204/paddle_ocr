@@ -40,6 +40,104 @@ final class PpOcrResultArrayC extends Struct {
   external Pointer<Utf8> error;
 }
 
+/// OCR 预处理与多分支识别选项（C 结构体）。
+///
+/// 字段顺序与类型必须与 `cpp/pp_ocr_ffi.h` 里的 `PpOcrOptions` 严格一致；
+/// 新增字段只能追加到末尾，并同步升级原生侧的 struct_size 校验。
+final class PpOcrOptionsC extends Struct {
+  /// 必须等于 pp_ocr_options_size()。
+  @Int32()
+  external int structSize;
+
+  // ---- 文本检测 ----
+  @Double()
+  external double detThresh;
+  @Double()
+  external double detBoxThresh;
+  @Double()
+  external double detUnclipRatio;
+  @Int32()
+  external int detMaxSideLen;
+  @Int32()
+  external int detMinBoxSize;
+  @Int32()
+  external int detMinBoxArea;
+
+  // ---- 文本识别 ----
+  @Int32()
+  external int recImgHeight;
+  @Int32()
+  external int recMaxImgWidth;
+  @Int32()
+  external int recEnhanceCrops;
+  @Int32()
+  external int recTryAllBranches;
+  @Double()
+  external double recMinConfidence;
+  @Int32()
+  external int recVariantSelect;
+
+  // ---- 文本条二次预处理 ----
+  @Int32()
+  external int cropBinarizeMode;
+  @Int32()
+  external int cropAdaptiveBlockSize;
+  @Double()
+  external double cropAdaptiveC;
+  @Int32()
+  external int cropEnhanceMode;
+  @Double()
+  external double cropClaheClipLimit;
+  @Int32()
+  external int cropClaheGridSize;
+  @Double()
+  external double cropSharpenAmount;
+  @Int32()
+  external int cropMorphCloseKernel;
+  @Int32()
+  external int cropMorphOpenKernel;
+  @Int32()
+  external int cropColorMode;
+
+  // ---- 多分支与区域合并 ----
+  @Uint32()
+  external int branches;
+  @Double()
+  external double mergeIouThreshold;
+  @Double()
+  external double mergeContainThreshold;
+  @Int32()
+  external int stitchSameLine;
+  @Double()
+  external double lineMinYOverlap;
+  @Double()
+  external double lineMaxGapRatio;
+  @Double()
+  external double lineMaxHeightDiffRatio;
+  @Double()
+  external double lineMaxWidthRatio;
+  @Double()
+  external double regionPadRatio;
+  @Int32()
+  external int maxRegions;
+  @Int32()
+  external int sortOrder;
+
+  // ---- 感兴趣区域 ----
+  @Int32()
+  external int roiX;
+  @Int32()
+  external int roiY;
+  @Int32()
+  external int roiW;
+  @Int32()
+  external int roiH;
+
+  // ---- 诊断 ----
+  @Int32()
+  external int verboseStats;
+}
+
 // ---------------------------------------------------------------------------
 // C 函数签名（原生侧）
 // ---------------------------------------------------------------------------
@@ -55,6 +153,27 @@ typedef _RecognizeFileNative =
 typedef _RecognizeBytesNative =
     PpOcrResultArrayC Function(Pointer<Void>, Pointer<Uint8>, Int32);
 typedef _VersionNative = Pointer<Utf8> Function();
+typedef _OptionsSizeNative = Int32 Function();
+typedef _OptionsInitNative = Void Function(Pointer<PpOcrOptionsC>);
+typedef _OptionsPresetNative = Int32 Function(Int32, Pointer<PpOcrOptionsC>);
+typedef _PresetNameNative = Pointer<Utf8> Function(Int32);
+typedef _OptionsSanitizeNative = Int32 Function(Pointer<PpOcrOptionsC>);
+typedef _SetDefaultOptionsNative =
+    Int32 Function(Pointer<Void>, Pointer<PpOcrOptionsC>);
+typedef _ClearDefaultOptionsNative = Void Function(Pointer<Void>);
+typedef _RecognizeFileExNative =
+    PpOcrResultArrayC Function(
+      Pointer<Void>,
+      Pointer<Utf8>,
+      Pointer<PpOcrOptionsC>,
+    );
+typedef _RecognizeBytesExNative =
+    PpOcrResultArrayC Function(
+      Pointer<Void>,
+      Pointer<Uint8>,
+      Int32,
+      Pointer<PpOcrOptionsC>,
+    );
 
 // ---------------------------------------------------------------------------
 // Dart 函数签名
@@ -71,6 +190,27 @@ typedef _RecognizeFileDart =
 typedef _RecognizeBytesDart =
     PpOcrResultArrayC Function(Pointer<Void>, Pointer<Uint8>, int);
 typedef _VersionDart = Pointer<Utf8> Function();
+typedef _OptionsSizeDart = int Function();
+typedef _OptionsInitDart = void Function(Pointer<PpOcrOptionsC>);
+typedef _OptionsPresetDart = int Function(int, Pointer<PpOcrOptionsC>);
+typedef _PresetNameDart = Pointer<Utf8> Function(int);
+typedef _OptionsSanitizeDart = int Function(Pointer<PpOcrOptionsC>);
+typedef _SetDefaultOptionsDart =
+    int Function(Pointer<Void>, Pointer<PpOcrOptionsC>);
+typedef _ClearDefaultOptionsDart = void Function(Pointer<Void>);
+typedef _RecognizeFileExDart =
+    PpOcrResultArrayC Function(
+      Pointer<Void>,
+      Pointer<Utf8>,
+      Pointer<PpOcrOptionsC>,
+    );
+typedef _RecognizeBytesExDart =
+    PpOcrResultArrayC Function(
+      Pointer<Void>,
+      Pointer<Uint8>,
+      int,
+      Pointer<PpOcrOptionsC>,
+    );
 
 // ---------------------------------------------------------------------------
 // FFI 绑定
@@ -139,6 +279,40 @@ class PpOcrFfiBindings {
   late final _version = _dylib.lookupFunction<_VersionNative, _VersionDart>(
     'pp_ocr_version',
   );
+  late final _optionsSize = _dylib
+      .lookupFunction<_OptionsSizeNative, _OptionsSizeDart>(
+        'pp_ocr_options_size',
+      );
+  late final _optionsInit = _dylib
+      .lookupFunction<_OptionsInitNative, _OptionsInitDart>(
+        'pp_ocr_options_init',
+      );
+  late final _optionsPreset = _dylib
+      .lookupFunction<_OptionsPresetNative, _OptionsPresetDart>(
+        'pp_ocr_options_preset',
+      );
+  late final _presetName = _dylib
+      .lookupFunction<_PresetNameNative, _PresetNameDart>('pp_ocr_preset_name');
+  late final _optionsSanitize = _dylib
+      .lookupFunction<_OptionsSanitizeNative, _OptionsSanitizeDart>(
+        'pp_ocr_options_sanitize',
+      );
+  late final _setDefaultOptions = _dylib
+      .lookupFunction<_SetDefaultOptionsNative, _SetDefaultOptionsDart>(
+        'pp_ocr_set_default_options',
+      );
+  late final _clearDefaultOptions = _dylib
+      .lookupFunction<_ClearDefaultOptionsNative, _ClearDefaultOptionsDart>(
+        'pp_ocr_clear_default_options',
+      );
+  late final _recognizeFileEx = _dylib
+      .lookupFunction<_RecognizeFileExNative, _RecognizeFileExDart>(
+        'pp_ocr_recognize_file_ex',
+      );
+  late final _recognizeBytesEx = _dylib
+      .lookupFunction<_RecognizeBytesExNative, _RecognizeBytesExDart>(
+        'pp_ocr_recognize_bytes_ex',
+      );
 
   /// 创建新的 OCR 引擎实例。
   Pointer<Void> create() => _create();
@@ -197,6 +371,70 @@ class PpOcrFfiBindings {
     try {
       ptr.asTypedList(bytes.length).setAll(0, bytes);
       return _recognizeBytes(engine, ptr, bytes.length);
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 预处理与多分支选项
+  // -------------------------------------------------------------------------
+
+  /// 原生侧 PpOcrOptions 的字节大小，用于核对结构体版本。
+  int optionsSize() => _optionsSize();
+
+  /// 把指针指向的结构体填成「标准」默认值。
+  void optionsInit(Pointer<PpOcrOptionsC> out) => _optionsInit(out);
+
+  /// 把指针指向的结构体填成某个预设的取值。返回 1 表示成功。
+  bool optionsPreset(int presetId, Pointer<PpOcrOptionsC> out) =>
+      _optionsPreset(presetId, out) != 0;
+
+  /// 预设的可读名称。
+  String presetName(int presetId) {
+    final ptr = _presetName(presetId);
+    if (ptr == nullptr) return '';
+    return ptr.toDartString();
+  }
+
+  /// 就地修正非法参数，返回被修正的字段个数（0 = 全部合法，-1 = 布局不匹配）。
+  int optionsSanitize(Pointer<PpOcrOptionsC> options) =>
+      _optionsSanitize(options);
+
+  /// 设置引擎级默认选项。[options] 为 null 表示不修改。
+  bool setDefaultOptions(
+    Pointer<Void> engine,
+    Pointer<PpOcrOptionsC>? options,
+  ) => _setDefaultOptions(engine, options ?? nullptr) != 0;
+
+  /// 清除引擎级默认选项，回到标准单分支行为。
+  void clearDefaultOptions(Pointer<Void> engine) =>
+      _clearDefaultOptions(engine);
+
+  /// 带选项从图片文件识别。[options] 为 null 时走引擎级默认。
+  PpOcrResultArrayC recognizeFileEx(
+    Pointer<Void> engine,
+    String imagePath,
+    Pointer<PpOcrOptionsC> options,
+  ) {
+    final pathPtr = imagePath.toNativeUtf8();
+    try {
+      return _recognizeFileEx(engine, pathPtr, options);
+    } finally {
+      calloc.free(pathPtr);
+    }
+  }
+
+  /// 带选项从图片字节识别。
+  PpOcrResultArrayC recognizeBytesEx(
+    Pointer<Void> engine,
+    Uint8List bytes,
+    Pointer<PpOcrOptionsC> options,
+  ) {
+    final ptr = calloc<Uint8>(bytes.length);
+    try {
+      ptr.asTypedList(bytes.length).setAll(0, bytes);
+      return _recognizeBytesEx(engine, ptr, bytes.length, options);
     } finally {
       calloc.free(ptr);
     }

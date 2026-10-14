@@ -95,3 +95,44 @@
   * `GDK_BACKEND=x11` — 强制走 X11（部分 Wayland 合成器下也会缓解）
 
 
+
+## 0.4.0
+
+**修复「一行字只识别出一部分」**：白字压在复杂背景（监控叠加字幕、路牌、低对比扫描件）上时，
+单路检测会把一行字碎裂成几段并丢头丢尾。现在整条管道可按需做多分支预处理召回。
+
+* 新增 [cpp/ocr_options.h](file:///home/ubuntu/project/paddle_ocr/cpp/ocr_options.h)：
+  检测 / 识别 / 预处理 / 多分支合并的全部可调参数与 6 个场景预设
+  （`standard` / `document` / `lowContrast` / `surveillance` / `smallText` / `maxRecall`）。
+  全部为定长 POD，可直接穿过 FFI。
+* 新增 [cpp/ocr_preprocess.cpp](file:///home/ubuntu/project/paddle_ocr/cpp/ocr_preprocess.cpp)：
+  二值化（Otsu / 自适应 / 自动极性）、CLAHE、锐化、去噪、**白色叠加字幕提取（V−S 响应）**、
+  形态学、旋转框 IoU / 包含度、跨分支去重合并、同行碎框拼接、区域外扩、多变体择优打分。
+* 识别管道升级为多分支：每路「预处理 + 检测参数」并行检测 → 跨分支合并去重 →
+  同行碎框拼成整行 → 同一区域在多张图上各识别一次并择优。
+  **二值化类分支只用于检测，其像素不会被喂给识别器**（否则大量乱码）。
+* 择优默认策略 `variant_select = 4`：以「结果宽度 vs 区域长宽比」为标尺，同时惩罚
+  读少了和插字读油了；同分时优先未二次增强的原像素候选。
+  （PP-OCR 的 CTC 置信度极易饱和——漏 3 个字也报 1.0，单靠置信度选不出更全的结果。）
+* C ABI 扩展（[cpp/pp_ocr_ffi.h](file:///home/ubuntu/project/paddle_ocr/cpp/pp_ocr_ffi.h)）：
+  `PpOcrOptions` 结构体 + `pp_ocr_options_size/init/preset/name/sanitize`、
+  `pp_ocr_set_default_options`、`pp_ocr_clear_default_options`、
+  `pp_ocr_recognize_file_ex`、`pp_ocr_recognize_bytes_ex`。
+  结构体带 `struct_size` 做版本协商，布局不匹配时**显式报错**而非静默读乱码。
+* Dart API：新增 `OcrOptions` / `OcrPreset` / `OcrBranch` / `BinarizeMode` / `EnhanceMode` /
+  `VariantSelection` / `ResultSortOrder`；`recognizeImage`、`recognizeImageBytes` 接受
+  `options:`；新增 `recognizeImageWithPreset()`、`setDefaultOptions()`、`clearDefaultOptions()`。
+  预设取值只由原生侧定义一处，`OcrOptions.preset(...)` 把它读成 Dart 对象后再微调。
+* 新增 `roi_*` 选项：只识别矩形内的文字，结果坐标仍以原图为基准。
+* 默认行为**完全不变**：不传 options 时仍走单分支标准路径，逐字与 0.3.x 一致。
+* Linux / Windows 的 MethodChannel 回退路径同步支持 options
+  （字段名单收敛在 `paddle_ocr::OptionsFromMapLookup` 一处，两个平台只做类型适配）。
+* 测试：C++ 侧新增 38 个用例（选项合法性、预处理算子、框几何、跨分支合并、同行拼接、
+  择优打分、FFI 选项接口），含两条回归——「同行拼接不得吞掉同一基线上的独立字幕」、
+  「白字提取必须把白字从同亮度的饱和彩色里分出来」。ctest 78/78 全绿，Dart 105/105 全绿。
+* 实测效果（1050×488 监控帧，字幕「一舍篮球场东北路口球G66-5724」压在树丛上）：
+  0.3.x 默认参数 → `球场东北路口球0` + `G66-57`（碎成两段，丢头丢尾）；
+  0.4.0 `surveillance` 预设 → `合篮球场东北路口球G66-5724`（完整一行）。
+  仅剩首字「一」被模型与「舍」合并成「合」——该字是压在树叶上的 2px 单横笔画，
+  属于 20px 字高下的模型识别极限，不是检测漏框。
+* 新增 `tool/diag_build.sh`：本地调参 / 回归确认用的探针工具（不属于插件产物）。

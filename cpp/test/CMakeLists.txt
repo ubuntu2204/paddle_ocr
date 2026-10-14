@@ -93,6 +93,8 @@ enable_testing()
 add_executable(pp_ocr_cpp_tests
   "${PLUGIN_CPP_DIR}/pp_ocr_ffi.cpp"
   "${PLUGIN_CPP_DIR}/ocr_engine.cpp"
+  "${PLUGIN_CPP_DIR}/ocr_options.cpp"
+  "${PLUGIN_CPP_DIR}/ocr_preprocess.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/cpp_shared_tests.cpp"
 )
 
