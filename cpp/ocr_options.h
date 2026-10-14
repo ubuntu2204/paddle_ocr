@@ -280,13 +280,13 @@ struct OcrOptions {
 //
 // 所有预设都以「单分支标准流程」为基线，只在召回策略上做增量，
 // 因此切换预设不会改变已有调用方的坐标语义。
+//
+// 历史上的 standard / document / lowContrast / smallText 已删除：
+// 实测它们对监控字幕类图片（如「一舍篮球场东北路口球G66-5724」）无法
+// 读出完整内容。编号沿用发布时的取值，不重排，中间留空洞。
 // ---------------------------------------------------------------------------
 enum OptionsPreset : int32_t {
-  kPresetStandard = 0,      // 单分支，等价于历史默认行为
-  kPresetDocument = 1,      // 文档/截图：干净、二值化友好
-  kPresetLowContrast = 2,   // 低对比：路牌、压暗背景白字
   kPresetSurveillance = 3,  // 监控画面：叠加字幕 + 复杂景物
-  kPresetSmallText = 4,     // 小字/远距离：以放大为主
   kPresetMaxRecall = 5,     // 全分支 + 全部后处理，最慢但最全
 };
 
@@ -297,7 +297,7 @@ void FillDefaultRecognize(RecognizeParams* p);
 void FillDefaultMerge(MergeParams* p);
 void FillDefaultOptions(OcrOptions* o);
 
-// 按预设生成选项。未知预设等价于 kPresetStandard。
+// 按预设生成选项。未知预设等价于标准默认值（单分支旧行为）。
 OcrOptions MakePresetOptions(int32_t preset);
 
 // 校验并原地修正非法取值（例如 block_size 取偶数、负阈值）。

@@ -56,29 +56,11 @@ int main(int argc, char** argv) {
   }
   printf("image %dx%d\n", src.cols, src.rows);
 
-  // 1) 基线（等价于历史行为）
-  Run(engine, src, "standard", po::MakePresetOptions(po::kPresetStandard));
+  // 基线（单分支默认值，非预设；用于对照多分支预设的收益）
+  Run(engine, src, "baseline_default", po::OcrOptions{});
 
-  // 2) 单路 white_text：验证「白字提取 + 自适应二值化」本身能不能召回整行
-  {
-    po::OcrOptions o = po::MakePresetOptions(po::kPresetStandard);
-    o.merge.branches = po::kBranchWhiteText;
-    o.merge.stitch_same_line = 0;
-    Run(engine, src, "white_text_only", o);
-  }
-
-  // 3) white_text + sensitive
-  {
-    po::OcrOptions o = po::MakePresetOptions(po::kPresetStandard);
-    o.merge.branches = po::kBranchWhiteText | po::kBranchSensitive;
-    o.merge.stitch_same_line = 0;
-    Run(engine, src, "white_text+sensitive", o);
-  }
-
-  // 4) 监控预设（多分支 + 拼接 + 文本条增强）
+  // 存活预设（standard/document/lowContrast/smallText 已删除）
   Run(engine, src, "surveillance", po::MakePresetOptions(po::kPresetSurveillance));
-
-  // 5) 全开
   Run(engine, src, "max_recall", po::MakePresetOptions(po::kPresetMaxRecall));
 
   return 0;

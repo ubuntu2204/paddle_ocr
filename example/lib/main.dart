@@ -8,7 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:pp_ocr/pp_ocr.dart';
 
 /// 应用版本号（与根 pubspec.yaml 的 version 保持同步）。
-const String kAppVersion = '0.5.0';
+const String kAppVersion = '0.5.1';
 
 /// 应用程序入口函数
 void main() {
@@ -95,15 +95,11 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
 
   /// 当前选中的识别预设。
   ///
-  /// [OcrPreset.standard] 等价于不传任何选项的历史行为；选
-  /// [OcrPreset.surveillance] 可以拿它验证「白字压复杂背景识别不全」的修复。
-  OcrPreset _preset = OcrPreset.standard;
+  /// [OcrPreset.surveillance] 是监控字幕场景的推荐值。
+  OcrPreset _preset = OcrPreset.surveillance;
 
   /// 按当前选择构造识别选项。
-  ///
-  /// 选 standard 时返回 null，让调用走引擎默认路径（与旧版逐字一致）。
-  OcrOptions? _optionsForPreset() =>
-      _preset == OcrPreset.standard ? null : OcrOptions.preset(_preset);
+  OcrOptions _optionsForPreset() => OcrOptions.preset(_preset);
 
   @override
   void initState() {
@@ -152,9 +148,9 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
 
     // 可选：指定用哪个预设跑 self-test，验证预处理接口的效果。
     //   PP_OCR_SELFTEST_PRESET=surveillance
-    // 不设置时走引擎默认（标准单分支），与旧版行为一致。
+    // 不设置时同样使用界面当前预设。
     final presetName = Platform.environment['PP_OCR_SELFTEST_PRESET'];
-    OcrOptions? selfTestOptions;
+    OcrOptions selfTestOptions = _optionsForPreset();
     if (presetName != null && presetName.isNotEmpty) {
       final matched = OcrPreset.values
           .where((p) => p.name == presetName)
@@ -594,24 +590,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
                 underline: const SizedBox.shrink(),
                 items: const [
                   DropdownMenuItem(
-                    value: OcrPreset.standard,
-                    child: Text('standard（旧行为）'),
-                  ),
-                  DropdownMenuItem(
-                    value: OcrPreset.document,
-                    child: Text('document（文档/截图）'),
-                  ),
-                  DropdownMenuItem(
-                    value: OcrPreset.lowContrast,
-                    child: Text('lowContrast（低对比）'),
-                  ),
-                  DropdownMenuItem(
                     value: OcrPreset.surveillance,
                     child: Text('surveillance（监控字幕）'),
-                  ),
-                  DropdownMenuItem(
-                    value: OcrPreset.smallText,
-                    child: Text('smallText（小字放大）'),
                   ),
                   DropdownMenuItem(
                     value: OcrPreset.maxRecall,

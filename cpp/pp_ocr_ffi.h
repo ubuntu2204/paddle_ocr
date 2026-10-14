@@ -145,13 +145,9 @@ enum {
                                PP_OCR_BRANCH_WHITE_TEXT
 };
 
-/// 预设编号
+/// 预设编号（standard/document/lowContrast/smallText 已删除，编号不重排）
 enum {
-  PP_OCR_PRESET_STANDARD = 0,
-  PP_OCR_PRESET_DOCUMENT = 1,
-  PP_OCR_PRESET_LOW_CONTRAST = 2,
   PP_OCR_PRESET_SURVEILLANCE = 3,
-  PP_OCR_PRESET_SMALL_TEXT = 4,
   PP_OCR_PRESET_MAX_RECALL = 5
 };
 

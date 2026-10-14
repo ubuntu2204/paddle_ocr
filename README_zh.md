@@ -186,8 +186,8 @@ final band = await ocr.recognizeImage(
 );
 ```
 
-可用预设：`standard`（保持旧行为不变）、`document`、`lowContrast`、`surveillance`、
-`smallText`、`maxRecall`。
+可用预设：`surveillance`（推荐默认）、`maxRecall`。旧的 `standard` / `document` /
+`lowContrast` / `smallText` 已删除 —— 实测它们都读不全监控字幕类图片。
 
 预设只是个**起点** —— 读回来再只改你关心的字段：
 

@@ -362,7 +362,8 @@ TEST(OcrOptions, DefaultsMatchHistoricalHardcodedValues) {
 TEST(OcrOptions, PresetsAreStrictlyWiderThanStandard) {
   OcrOptions standard;
   FillDefaultOptions(&standard);
-  for (int32_t p = kPresetDocument; p <= kPresetMaxRecall; ++p) {
+  // 旧 standard/document/lowContrast/smallText 已删除，编号留空洞不重排。
+  for (int32_t p : {kPresetSurveillance, kPresetMaxRecall}) {
     const OcrOptions o = MakePresetOptions(p);
     EXPECT_GT(CountBranches(o.merge.branches), 1)
         << "preset " << PresetName(p) << " 应该开多分支";
@@ -848,7 +849,7 @@ TEST(FfiOptions, PresetFillsWiderConfiguration) {
 }
 
 TEST(FfiOptions, NullOutIsRejectedNotCrashing) {
-  EXPECT_EQ(pp_ocr_options_preset(PP_OCR_PRESET_STANDARD, nullptr), 0);
+  EXPECT_EQ(pp_ocr_options_preset(999, nullptr), 0);  // 未知预设 + null 双拦截
   pp_ocr_options_init(nullptr);  // 不应崩
   EXPECT_EQ(pp_ocr_options_sanitize(nullptr), -1);
 }

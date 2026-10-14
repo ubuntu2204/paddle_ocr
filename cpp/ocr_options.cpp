@@ -126,25 +126,6 @@ OcrOptions MakePresetOptions(int32_t preset) {
   FillDefaultOptions(&o);
 
   switch (preset) {
-    case kPresetDocument:
-      // 文档/截图：文字与背景分离干净，单分支 + 二值化择优即可。
-      o.merge.branches = kBranchRaw | kBranchOtsuBin;
-      o.rec.enhance_crops = 2;
-      o.rec.crop_preprocess.binarize_mode = kBinarizeOtsuInv;
-      o.rec.crop_preprocess.morph_open_kernel = 0;
-      break;
-
-    case kPresetLowContrast:
-      // 低对比：靠 CLAHE + 自适应二值化把笔画从背景里拉出来。
-      o.merge.branches =
-          kBranchRaw | kBranchAdaptiveBin | kBranchClahe | kBranchSensitive;
-      o.merge.stitch_same_line = 1;
-      o.merge.region_pad_ratio = 0.20;
-      o.rec.enhance_crops = 2;
-      o.det.thresh = 0.26;
-      o.det.box_thresh = 0.45;
-      break;
-
     case kPresetSurveillance:
       // 监控画面：叠加字幕（白字 + 半透明底）与压景物的白字同时存在，
       // 且整帧分辨率高、字相对小 —— 需要多分支召回 + 碎框拼接。
@@ -169,14 +150,6 @@ OcrOptions MakePresetOptions(int32_t preset) {
       o.det.max_side_len = 1280;
       break;
 
-    case kPresetSmallText:
-      // 小字：先放大再检测，同时放宽输入最长边限制。
-      o.merge.branches = kBranchRaw | kBranchUpscale2x | kBranchAdaptiveBin;
-      o.det.max_side_len = 1600;
-      o.rec.enhance_crops = 2;
-      o.rec.img_height = 64;
-      break;
-
     case kPresetMaxRecall:
       // 全开：所有分支 + 所有后处理。耗时约为标准模式的 6~10 倍。
       o.merge.branches = kBranchAll;
@@ -194,9 +167,9 @@ OcrOptions MakePresetOptions(int32_t preset) {
       o.det.max_side_len = 1280;
       break;
 
-    case kPresetStandard:
     default:
       // 保持历史行为：单分支、无二次预处理。
+      // （standard/document/lowContrast/smallText 已删除，见 ocr_options.h）
       break;
   }
   return o;
@@ -303,11 +276,7 @@ int32_t SanitizeOptions(OcrOptions* o) {
 
 const char* PresetName(int32_t preset) {
   switch (preset) {
-    case kPresetStandard: return "standard";
-    case kPresetDocument: return "document";
-    case kPresetLowContrast: return "low_contrast";
     case kPresetSurveillance: return "surveillance";
-    case kPresetSmallText: return "small_text";
     case kPresetMaxRecall: return "max_recall";
     default: return "unknown";
   }

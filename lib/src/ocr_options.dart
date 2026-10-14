@@ -163,21 +163,13 @@ enum OcrBranch {
 
 /// 原生预设。默认值只在原生侧定义，Dart 不复制一份，避免两边漂移；
 /// 用 [OcrOptions.preset] 可以把某个预设完整读成 Dart 对象再微调。
+///
+/// 历史上的 standard / document / lowContrast / smallText 已删除：
+/// 实测它们对监控字幕类图片读不出完整内容。编号沿用发布时的取值，
+/// 不重排，中间留空洞。
 enum OcrPreset {
-  /// 单分支，等价于历史默认行为。
-  standard(0),
-
-  /// 文档 / 屏幕截图。
-  document(1),
-
-  /// 低对比：路牌、压暗背景上的白字。
-  lowContrast(2),
-
   /// 监控画面：叠加字幕 + 复杂景物。白字压绿树这类漏检的推荐值。
   surveillance(3),
-
-  /// 小字 / 远距离：以放大为主。
-  smallText(4),
 
   /// 全分支 + 全部后处理，最慢但最全。
   maxRecall(5);

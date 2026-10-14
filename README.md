@@ -194,8 +194,9 @@ final band = await ocr.recognizeImage(
 );
 ```
 
-Presets: `standard` (unchanged legacy behaviour), `document`, `lowContrast`,
-`surveillance`, `smallText`, `maxRecall`.
+Presets: `surveillance` (recommended default), `maxRecall`. The legacy
+`standard` / `document` / `lowContrast` / `smallText` presets were removed —
+none of them could read surveillance-style captions completely.
 
 Each preset is a *starting point* — read it back and override only what you care about:
 

@@ -175,3 +175,11 @@
     RecognizeBox / ApplyImageTransform` 原子方法。
 * 测试：C++ 78/78 全绿（新增识别窗构造、水平带去重、管线原子操作回归）；
   Dart 66/66 全绿（新增管线打分与插件接口契约测试）。
+## 0.5.1
+
+* **预设做减法**：`standard` / `document` / `lowContrast` / `smallText` 四个
+  预设删除 —— 实测它们都无法读出「一舍篮球场东北路口球G66-5724」这类监控
+  字幕（碎片化或整行丢失）。仅保留 `surveillance`（推荐默认）与 `maxRecall`。
+  预设编号沿用发布时取值不重排（surveillance=3、maxRecall=5），原生
+  `MakePresetOptions()` 对未知编号回退标准默认值。不传选项的引擎默认行为
+  （单分支旧行为）不受影响。

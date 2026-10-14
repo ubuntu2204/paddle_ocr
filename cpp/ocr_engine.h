@@ -40,7 +40,7 @@ class TextDetector {
   std::string input_name_ = "x";  // 模型输入节点名称
   std::string output_name_ = "save_infer_model/scale_0.tmp_1";  // 模型输出节点名称
 
-  // 内置默认参数（等价于 kPresetStandard）；实际推理一律走 DetectParams
+  // 内置默认参数（单分支旧行为，非预设）；实际推理一律走 DetectParams
   static DetectParams DefaultParams();
 
   // 图像预处理：缩放、归一化，返回处理后的 Mat 及缩放比例
