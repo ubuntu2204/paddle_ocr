@@ -218,22 +218,53 @@ the region's aspect ratio — which penalises both under-reading and padded garb
 Binarised branch images are used for **detection only**; feeding them to the recognizer
 produces mostly gibberish.
 
+### Injecting your own preprocessing (plugin interface)
+
+The built-in branches are fixed. If your app has its own image processing
+(super-resolution, colour-domain extraction, dehazing, …), implement
+`OcrPreprocessor` and hand the variants to `runPipeline` — detection, region
+merging and best-variant recognition are all shared with the engine:
+
+```dart
+final results = await ocr.runPipeline(imageBytes, [
+  upscalePreprocessor(times: 3),           // built-in 3x upscale (native OpenCV)
+  whiteTextPreprocessor(),                 // built-in white-caption extraction
+  CustomTransformPreprocessor(             // your own Dart code
+    (bytes) => mySuperResolutionModel(bytes),
+    name: 'superres',
+    scale: 2.0,                            // variant scale, for box mapping
+  ),
+], options: OcrOptions.preset(OcrPreset.surveillance));
+```
+
+Pipeline flow: each variant is detected → boxes are merged into recognition
+windows → every window is recognized on the base image plus each `recSource`
+variant, keeping the best reading. Binarised variants (`recSource: false`)
+contribute detection boxes only.
+
+The same four steps are exposed as plain C API atoms for non-Flutter hosts:
+`pp_ocr_preprocess_bytes`, `pp_ocr_detect_bytes`, `pp_ocr_merge_boxes`,
+`pp_ocr_recognize_box_bytes` (see `cpp/pp_ocr_ffi.h`).
+
 See the [example app](example/) for a complete demo with image picker, preset
 selector and visual box overlay.
 
 ## Architecture
 
-The plugin supports two backends:
+The recognition path is **FFI only** — pushing whole images through a
+MethodChannel costs a serialization round-trip per call, so no fallback exists.
+The native library failing to load raises a `StateError` immediately instead of
+silently degrading. A small `PluginChannelPaddleOcr` remains for the two things
+FFI cannot do: the native file picker and platform version queries.
 
-### FFI (Default)
+### FFI
 - C++ engine compiled as DLL with C API (`pp_ocr_ffi.h`)
 - Dart calls native functions directly via `dart:ffi`
 - Lower latency, no serialization overhead
-- Automatic fallback to MethodChannel if DLL not found
 
-### MethodChannel (Fallback)
+### MethodChannel (picker / platform info only)
 - Traditional Flutter plugin architecture via `MethodChannel('paddle_ocr')`
-- Used when FFI DLL is unavailable
+- Used by `pickImage()` (native file dialog) and `getPlatformVersion()` only
 
 ```
 ┌──────────────────────────────────────────────┐

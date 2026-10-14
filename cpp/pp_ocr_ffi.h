@@ -125,6 +125,8 @@ enum {
   PP_OCR_BRANCH_SHARPEN = 1 << 6,
   PP_OCR_BRANCH_DENOISE_CLAHE = 1 << 7,
   PP_OCR_BRANCH_WHITE_TEXT = 1 << 8,
+  /// 3 倍放大：2x 对 20px 级小字仍会偶发繁简误读（篮→籃），3x 实测完全正确。
+  PP_OCR_BRANCH_UPSCALE3X = 1 << 9,
   /// 单路（等价于历史行为）
   PP_OCR_BRANCH_MONO = PP_OCR_BRANCH_RAW,
   /// 全部开启，最慢最全
@@ -132,11 +134,12 @@ enum {
                       PP_OCR_BRANCH_OTSU_BIN | PP_OCR_BRANCH_CLAHE |
                       PP_OCR_BRANCH_UPSCALE2X | PP_OCR_BRANCH_SENSITIVE |
                       PP_OCR_BRANCH_SHARPEN | PP_OCR_BRANCH_DENOISE_CLAHE |
-                      PP_OCR_BRANCH_WHITE_TEXT,
+                      PP_OCR_BRANCH_WHITE_TEXT | PP_OCR_BRANCH_UPSCALE3X,
   /// 监控画面推荐组合
   PP_OCR_BRANCH_SURVEILLANCE = PP_OCR_BRANCH_RAW |
                                PP_OCR_BRANCH_ADAPTIVE_BIN |
                                PP_OCR_BRANCH_CLAHE | PP_OCR_BRANCH_UPSCALE2X |
+                               PP_OCR_BRANCH_UPSCALE3X |
                                PP_OCR_BRANCH_SENSITIVE |
                                PP_OCR_BRANCH_DENOISE_CLAHE |
                                PP_OCR_BRANCH_WHITE_TEXT
@@ -198,6 +201,9 @@ typedef struct {
   double line_max_height_diff_ratio;
   double line_max_width_ratio;
   double region_pad_ratio;            ///< 区域外扩比例（相对字高）
+  /// 识别窗沿行方向向两侧外扩的比例（相对字高）。把检测框紧邻的漏检字
+  /// （孤立单横「一」等）纳入 CRNN 识别窗。0 = 不延伸。
+  double region_pad_long_ratio;
   int32_t max_regions;                ///< 结果数上限，0 = 不限制
   int32_t sort_order;                 ///< 0=阅读顺序 1=面积降序 2=不排序
 
@@ -242,6 +248,107 @@ PP_OCR_EXPORT PpOcrResultArray pp_ocr_recognize_file_ex(
 PP_OCR_EXPORT PpOcrResultArray pp_ocr_recognize_bytes_ex(
     PpOcrEngine* engine, const uint8_t* data, int length,
     const PpOcrOptions* options);
+
+// ===========================================================================
+// 原子操作（宿主编排自定义识别管线的插件接口）
+//
+// 完整识别接口（pp_ocr_recognize_*_ex）固定使用内置预处理分支；宿主若
+// 想注入自己的预处理（超分、色彩域提取、去雾……），用下面四个原子步骤
+// 自行编排「预处理 → 检测 → 合并 → 识别」，与 C++ 内部管线共享同一套
+// 模型与几何后处理：
+//
+//   1. pp_ocr_preprocess_bytes：对整图跑一次内置预处理变换；
+//   2. pp_ocr_detect_bytes：对一张（已预处理的）图跑文本检测；
+//   3. pp_ocr_merge_boxes：把多路检测框合并成「识别窗」列表
+//      （去重 + 同行拼接 + 成员基底外扩，输出的框可直接裁剪识别）；
+//   4. pp_ocr_recognize_box_bytes：在指定图上识别一个文本窗。
+//
+// 坐标约定：所有框都在「传给本次调用的那张图」的坐标系；宿主对放大
+// 变体检出的框，需自行按缩放系数换算回底图坐标再交给 merge。
+// ===========================================================================
+
+/// 预处理变换参数（对应 C++ PreprocessParams 的平铺形式）。
+typedef struct {
+  int32_t struct_size;              ///< 必须等于 transform_params_size()
+  int32_t scale_percent;            ///< 100 = 原尺寸，200 = 放大一倍
+  int32_t binarize_mode;            ///< PP_OCR_BINARIZE_*
+  int32_t adaptive_block_size;      ///< 0 = 按图尺寸自动取
+  double adaptive_c;
+  int32_t enhance_mode;             ///< PP_OCR_ENHANCE_*
+  double clahe_clip_limit;
+  int32_t clahe_grid_size;
+  double sharpen_amount;
+  int32_t morph_open_kernel;        ///< 0 = 关闭
+  int32_t morph_close_kernel;       ///< 0 = 关闭
+  int32_t color_mode;               ///< PP_OCR_COLOR_*
+} PpOcrTransformParams;
+
+/// 返回 sizeof(PpOcrTransformParams)。
+PP_OCR_EXPORT int32_t pp_ocr_transform_params_size(void);
+
+/// 用默认值填充变换参数（不缩放、不增强、不二值化）。
+PP_OCR_EXPORT void pp_ocr_transform_params_init(PpOcrTransformParams* out);
+
+/// 引擎持有的图像缓冲区（下一次调用同引擎的任何接口前有效）。
+typedef struct {
+  const uint8_t* data;  ///< PNG 编码字节
+  int32_t size;
+} PpOcrImageBuffer;
+
+/// 检测框（4 角点 + 来源信息）。
+typedef struct {
+  double box[8];
+  int32_t branch_index;
+  double score;
+} PpOcrBoxInput;
+
+/// 检测框数组（引擎持有，下一次调用前有效）。
+typedef struct {
+  PpOcrBoxInput* items;
+  int32_t count;
+  int32_t image_width;  ///< 本次检测/合并输入图的宽（框坐标以它为基准）
+  int32_t image_height;
+  const char* error;  ///< 成功时为 nullptr
+} PpOcrBoxArray;
+
+/// 单窗识别结果（引擎持有，下一次调用前有效）。
+typedef struct {
+  const char* text;
+  double confidence;
+} PpOcrTextResult;
+
+/// 原子 1：对图像字节跑一次内置预处理变换，输出 PNG 编码字节。
+/// 成功返回 1；失败返回 0（可用 pp_ocr_get_last_error 取原因）。
+PP_OCR_EXPORT int pp_ocr_preprocess_bytes(PpOcrEngine* engine,
+                                          const uint8_t* data, int length,
+                                          const PpOcrTransformParams* params,
+                                          PpOcrImageBuffer* out);
+
+/// 原子 2：对图像字节跑文本检测。options 的 det.* 部分生效；
+/// 框坐标在输入图坐标系。失败返回 0。
+PP_OCR_EXPORT int pp_ocr_detect_bytes(PpOcrEngine* engine,
+                                      const uint8_t* data, int length,
+                                      const PpOcrOptions* options,
+                                      PpOcrBoxArray* out);
+
+/// 原子 3：合并多路检测框（去重 + 同行拼接 + 识别窗构造）。
+/// options 的 merge.* 部分生效；输出的框即为「识别窗」。
+/// 框坐标必须在同一张底图坐标系（image_width/height 为底图尺寸）。
+/// 失败返回 0。
+PP_OCR_EXPORT int pp_ocr_merge_boxes(PpOcrEngine* engine,
+                                     const PpOcrBoxInput* boxes, int count,
+                                     const PpOcrOptions* options,
+                                     int image_width, int image_height,
+                                     PpOcrBoxArray* out);
+
+/// 原子 4：在图像字节上识别一个文本窗。options 的 rec.* 部分生效
+/// （含 enhance_crops 择优）。box 为 4 角点 [x0,y0,...,x3,y3]。
+/// 失败返回 0。
+PP_OCR_EXPORT int pp_ocr_recognize_box_bytes(PpOcrEngine* engine,
+                                             const uint8_t* data, int length,
+                                             const double box[8],
+                                             const PpOcrOptions* options,
+                                             PpOcrTextResult* out);
 
 #ifdef __cplusplus
 }  // extern "C"

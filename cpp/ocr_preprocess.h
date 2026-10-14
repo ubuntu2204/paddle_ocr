@@ -1,6 +1,7 @@
 #ifndef OCR_PREPROCESS_H_
 #define OCR_PREPROCESS_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -12,10 +13,101 @@
 namespace paddle_ocr {
 
 // ===========================================================================
-// 图像预处理算子
+// 预处理插件接口（IImageTransform）
 //
-// 全部为无状态自由函数：输入 Mat、输出 Mat，便于单元测试，也便于宿主
-// 只借用其中某一个算子（例如只做二值化）而不走整条 OCR 管道。
+// 预处理管线由有序的「变换步骤」组成。每个步骤实现该接口；宿主（嵌入
+// 引擎的其他 App）可以实现自己的步骤并组装进 PreprocessPipeline，从而
+// 注入任意的图像预处理逻辑（色彩域提取、超分、去雾……），而无需改动
+// 引擎源码。内置步骤（缩放/增强/二值化/形态学/通道）同样实现该接口。
+//
+// 线程约定：Apply 必须是 const 且无状态（同一实例可被并发调用）。
+// ===========================================================================
+class IImageTransform {
+ public:
+  virtual ~IImageTransform() = default;
+  // 步骤名，用于日志与诊断。
+  virtual const char* name() const = 0;
+  // 对输入图做变换并返回新图。p 是整条管线共享的参数包，各步骤只读
+  // 自己关心的字段。
+  virtual cv::Mat Apply(const cv::Mat& src, const PreprocessParams& p) const = 0;
+};
+
+// ---------------------------------------------------------------------------
+// 内置变换步骤（与历史 ApplyXxx 自由函数一一对应）
+// ---------------------------------------------------------------------------
+
+// 步骤 1：按 p.scale_percent 缩放。
+class ScaleTransform : public IImageTransform {
+ public:
+  const char* name() const override { return "scale"; }
+  cv::Mat Apply(const cv::Mat& src, const PreprocessParams& p) const override;
+};
+
+// 步骤 2：按 p.enhance_mode 做去噪/增强/白字提取。
+class EnhanceTransform : public IImageTransform {
+ public:
+  const char* name() const override { return "enhance"; }
+  cv::Mat Apply(const cv::Mat& src, const PreprocessParams& p) const override;
+};
+
+// 步骤 3：按 p.binarize_mode 二值化。
+class BinarizeTransform : public IImageTransform {
+ public:
+  const char* name() const override { return "binarize"; }
+  cv::Mat Apply(const cv::Mat& src, const PreprocessParams& p) const override;
+};
+
+// 步骤 4：按 p.morph_*_kernel 做形态学开闭。
+class MorphologyTransform : public IImageTransform {
+ public:
+  const char* name() const override { return "morphology"; }
+  cv::Mat Apply(const cv::Mat& src, const PreprocessParams& p) const override;
+};
+
+// 步骤 5：按 p.color_mode 做通道处理。
+class ColorTransform : public IImageTransform {
+ public:
+  const char* name() const override { return "color"; }
+  cv::Mat Apply(const cv::Mat& src, const PreprocessParams& p) const override;
+};
+
+// ---------------------------------------------------------------------------
+// 预处理管线：有序步骤列表。
+//
+// 用法一（默认管线）= 历史 ApplyPreprocess 的行为：
+//   const PreprocessPipeline& pipeline = DefaultPreprocessPipeline();
+//   cv::Mat out = pipeline.Run(src, params, &applied_scale);
+//
+// 用法二（宿主自定义）：清空后按需组装，甚至插入自己的变换：
+//   PreprocessPipeline pipeline;
+//   pipeline.AddStep(std::make_shared<MySuperresTransform>());
+//   pipeline.AddStep(std::make_shared<BinarizeTransform>());
+// ===========================================================================
+class PreprocessPipeline {
+ public:
+  // 添加一个步骤（shared_ptr 便于宿主复用同一实例）。
+  PreprocessPipeline& AddStep(std::shared_ptr<IImageTransform> step);
+  // 重置为内置默认顺序（scale→enhance→binarize→morphology→color）。
+  void UseDefaults();
+  // 清空所有步骤。空管线 = 原样返回。
+  void Clear();
+  bool Empty() const { return steps_.empty(); }
+  // 步骤名列表（日志用）。
+  std::vector<std::string> StepNames() const;
+  // 依次执行。applied_scale 回填管线内实际发生的累计缩放（仅当默认
+  // 管线或第一步是缩放时有意义；自定义管线请自行处理坐标换算）。
+  cv::Mat Run(const cv::Mat& src, const PreprocessParams& p,
+              double* applied_scale = nullptr) const;
+
+ private:
+  std::vector<std::shared_ptr<IImageTransform>> steps_;
+};
+
+// 取默认管线的共享实例（只读，线程安全）。
+const PreprocessPipeline& DefaultPreprocessPipeline();
+
+// ===========================================================================
+// 兼容的自由函数入口（沿用历史语义，内部走内置算子）
 // ===========================================================================
 
 // 按完整参数依次执行：缩放 → 增强 → 二值化 → 形态学 → 通道处理。
@@ -58,11 +150,19 @@ struct MergedBox {
   double score = 0.0;         // 贡献框得分的最大值
   int member_count = 1;       // 参与合并的原始框数量
   bool stitched = false;      // 是否由「同行碎框拼接」而来
+  // 成员框（原图坐标系）。union 会把「贴边碎片」的歪斜几何一并吃进来
+  //（典型：图像顶部的残框把 union 撑高、拉宽），直接拿 union 当识别窗
+  // 会稀释字带、引入错字；识别窗应优先用最贴合字带的成员框。
+  std::vector<std::vector<cv::Point>> member_boxes;
   // 「参考几何」：在 region_pad_ratio 外扩**之前**的长短边。
   // 外扩后的短边包含了空白，拿它反推预期字数会系统性低估，
   // 从而惩罚掉读得最全的候选，所以这里单独存一份。
   double ref_long_side = 0.0;
   double ref_short_side = 0.0;
+  // 「字高」= 成员框短边的中位数（merge 阶段统计）。union 的短边会被
+  // 贴边碎片撑大一倍，用它反推预期字数会把「读少了」的候选误判为
+  // 「贴合」；真实字高才是可靠的标尺。0 = 未知（退回 ref_short_side）。
+  double text_height = 0.0;
 };
 
 double BoxArea(const std::vector<cv::Point>& box);
@@ -87,6 +187,13 @@ std::vector<cv::Point> UnionBoxes(
     const std::vector<std::vector<cv::Point>>& boxes);
 
 // 判断两个框是否应视为同一区域。
+// 三条判据（满足任一即重复）：
+//   1. IoU ≥ merge_iou_threshold；
+//   2. 包含度 ≥ merge_contain_threshold；
+//   3. 「同一水平带 + 水平重叠」：两框中心 y 差 < 0.6×平均字高 且
+//      水平方向重叠长度 > 0.7×较短框宽。文本行是水平延伸目标，跨分支
+//      检出的行碎片往往垂直对不齐（贴边框 y 从 0 开始），用 IoU/包含度
+//      会漏判 —— 典型残留如整行「…G66-5724」旁多出的「724」碎框。
 bool BoxesAreDuplicate(const std::vector<cv::Point>& a,
                        const std::vector<cv::Point>& b, const MergeParams& m);
 
@@ -108,6 +215,41 @@ std::vector<MergedBox> StitchSameLine(const std::vector<MergedBox>& boxes,
 // 用于把贴边笔画（如「一」这种单横字）纳回裁剪区。
 void PadRegions(std::vector<MergedBox>* regions, double pad_ratio,
                 int image_width, int image_height);
+
+// 把单个框沿「长边方向」向两侧各外扩 `pad_long_ratio * 短边`（字高），
+// 短边方向不动，结果夹回图像范围。PadRegionsAlongLongSide 的单框形式。
+std::vector<cv::Point> PadBoxAlongLongSide(const std::vector<cv::Point>& box,
+                                           double pad_long_ratio,
+                                           int image_width, int image_height);
+
+// 把每个区域沿「长边方向」向两侧各外扩 `pad_long_ratio * 短边`（字高），
+// 垂直（短边）方向不动。用于把**检测框外侧紧邻的字符**（典型：孤立单横
+// 「一」，DB 检测模型对它没有响应）纳入识别裁剪窗 —— 识别器是整行
+// CRNN，窗口里多一段背景不会影响它读出紧邻的字。
+// 实测：对 22px 字高的监控字幕行，外扩 1.0 倍字高即可把行首「一」找回。
+void PadRegionsAlongLongSide(std::vector<MergedBox>* regions,
+                             double pad_long_ratio, int image_width,
+                             int image_height);
+
+// 把单个框四周均匀外扩 `pad_ratio * 短边`，夹回图像范围。
+// PadRegions 的单框形式。
+std::vector<cv::Point> PadBox(const std::vector<cv::Point>& box,
+                              double pad_ratio, int image_width,
+                              int image_height);
+
+// 为一个合并区域构造「识别窗」：
+//   1. 基底优先取成员框中长边最大者（最贴合字带的整行检出）；
+//      只有当它不足区域长边的 anchor_min_region_ratio 时（成员全是
+//      碎框）才退回区域自身。
+//   2. 基底先四周外扩 pad_ratio × 短边（把贴边笔画纳回），再沿长边
+//      方向向两侧各外扩 pad_long_ratio × 短边（找回紧邻的漏检字），
+//      每步都夹回图像范围。
+// 返回 4 角点（旋转矩形，坐标在原图系）。识别窗独立于 region.points，
+// 供择优识别与宿主编排使用。
+std::vector<cv::Point> BuildRecognitionWindow(
+    const MergedBox& region, double pad_ratio, double pad_long_ratio,
+    int image_width, int image_height,
+    double anchor_min_region_ratio = 0.7);
 
 // 排序：0 = 阅读顺序（先上后左，按行分组），1 = 面积降序，2 = 保持入参顺序。
 void SortBoxesForReadingOrder(std::vector<MergedBox>* boxes, int sort_order);

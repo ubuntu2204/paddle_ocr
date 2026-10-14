@@ -196,16 +196,21 @@ enum BranchFlag : uint32_t {
   kBranchDenoiseClahe = 1u << 7,
   // 白色叠加字幕提取 + 自适应二值化：监控/直播画面漏检的主因就在这里。
   kBranchWhiteText = 1u << 8,
+  // 3 倍放大：2x 对 20px 级小字仍会偶发繁简误读（篮→籃），3x 下识别
+  // 器笔画细节充足、实测完全正确。速度比 2x 再慢一档，按需开启。
+  kBranchUpscale3x = 1u << 9,
 
   // 常用组合。
   kBranchMono = kBranchRaw,
   kBranchAll = kBranchRaw | kBranchAdaptiveBin | kBranchOtsuBin |
                kBranchClahe | kBranchUpscale2x | kBranchSensitive |
-               kBranchSharpen | kBranchDenoiseClahe | kBranchWhiteText,
+               kBranchSharpen | kBranchDenoiseClahe | kBranchWhiteText |
+               kBranchUpscale3x,
   // 监控/低对比画面推荐组合：覆盖叠加字幕与压景物的白字。
   kBranchSurveillance = kBranchRaw | kBranchAdaptiveBin | kBranchClahe |
-                        kBranchUpscale2x | kBranchSensitive |
-                        kBranchDenoiseClahe | kBranchWhiteText,
+                        kBranchUpscale2x | kBranchUpscale3x |
+                        kBranchSensitive | kBranchDenoiseClahe |
+                        kBranchWhiteText,
 };
 
 // ---------------------------------------------------------------------------
@@ -236,6 +241,12 @@ struct MergeParams {
   // 最终区域外扩比例（相对短边/字高）。用于把贴边的笔画（如「一」这种
   // 单横字）纳回裁剪区。0 = 不外扩。
   double region_pad_ratio;
+  // 最终区域沿「长边方向」向两侧外扩的比例（相对短边/字高）。
+  // 识别裁剪窗的行向延伸：把检测框外侧紧邻的字符（典型：孤立单横「一」，
+  // DB 检测模型对它没有响应）纳入识别窗 —— CRNN 识别器窗口里多一段背景
+  // 不影响读出紧邻的字。监控字幕实测 1.0~1.5 即可找回行首/行尾漏检字。
+  // 0 = 不延伸。
+  double region_pad_long_ratio;
   // 最终结果数量上限，0 = 不限制。
   int32_t max_regions;
   // 排序方式：0 = 阅读顺序（先上后左），1 = 面积降序，2 = 分支产出顺序。

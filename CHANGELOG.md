@@ -136,3 +136,42 @@
   仅剩首字「一」被模型与「舍」合并成「合」——该字是压在树叶上的 2px 单横笔画，
   属于 20px 字高下的模型识别极限，不是检测漏框。
 * 新增 `tool/diag_build.sh`：本地调参 / 回归确认用的探针工具（不属于插件产物）。
+
+## 0.5.0
+
+* **识别修复（「一舍篮球场东北路口球G66-5724」场景实测）**：0.4.0 的
+  surveillance 预设读出 `合篮球场...`（丢行首「一」、「舍」误读「合」、残留
+  重复碎片「724」）；0.5.0 读出完整的 `一舍篮球场东北路口球G66-5724`。
+  三项根因修复：
+  * **识别窗与区域框分离**：union 框会被贴边碎片撑歪（残框把高度撑大一倍，
+    CRNN 缩放到 48px 后字带只占一半、开始读错字）。现在从成员框群体统计
+    出字带（短边中位数 = 字高、y 中心中位数 = 行带），构造独立的「识别窗」；
+    `MergedBox` 新增 `member_boxes` / `text_height`。
+  * **行向外扩 `region_pad_long_ratio`**：DB 检测对紧邻行的孤立字符（单横
+    「一」）没有响应，识别窗沿行方向向两侧各外扩 1.2 倍字高后，CRNN 能把
+    紧邻的字读出来（surveillance / max_recall 预设默认开启）。
+  * **合并判据与择优增强**：`BoxesAreDuplicate` 新增「垂直咬合 ≥ 50% 且水平
+    重叠 > 70% 短宽」的水平带判据（消灭贴顶碎框「724」残留）；CTC 置信度
+    饱和导致候选同分时，放大分支的候选胜出（1x 把「舍」读成「合」，
+    2x/3x 正确）。
+  * 新增 `kBranchUpscale3x` 分支（位 1<<9）：2x 对 20px 级小字仍会偶发
+    繁简误读（篮→籃），3x 下实测完全正确。
+* **MethodChannel 识别回退路线删除**：识别链路 100% 走 FFI，原生库不可用时
+  抛 `StateError` 而不是静默降级（整图字节跨通道序列化的开销不可接受）。
+  `OcrOptions.toMap/fromMap`、`OcrResult.fromMap` 随之删除。
+  MethodChannel 仅保留 FFI 无法实现的功能（`pickImage` 原生文件对话框、
+  `getPlatformVersion`），见 `PluginChannelPaddleOcr`。
+* **预处理插件接口（管线编排）**：宿主 App 可注入自定义预处理并与引擎共享
+  检测/合并/择优核心：
+  * Dart：`OcrPreprocessor` 接口 + `NativeTransformPreprocessor`（参数驱动
+    内置算子）/ `CustomTransformPreprocessor`（任意 Dart 图像处理）+
+    `PaddleOcr.runPipeline()`；快捷构造 `upscalePreprocessor()`、
+    `binarizePreprocessor()`、`whiteTextPreprocessor()`。
+  * C：四个原子操作 `pp_ocr_preprocess_bytes` / `pp_ocr_detect_bytes` /
+    `pp_ocr_merge_boxes` / `pp_ocr_recognize_box_bytes`（与完整管线共享同一套
+    模型与几何后处理）；`PpOcrTransformParams` 平铺参数结构。
+  * C++：`IImageTransform` / `PreprocessPipeline` 预处理管线接口（内置步骤
+    可替换、宿主步骤可插入）、`OcrEngine::DetectOnImage / MergeRegions /
+    RecognizeBox / ApplyImageTransform` 原子方法。
+* 测试：C++ 78/78 全绿（新增识别窗构造、水平带去重、管线原子操作回归）；
+  Dart 66/66 全绿（新增管线打分与插件接口契约测试）。

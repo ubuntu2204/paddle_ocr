@@ -8,7 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:pp_ocr/pp_ocr.dart';
 
 /// 应用版本号（与根 pubspec.yaml 的 version 保持同步）。
-const String kAppVersion = '0.4.0';
+const String kAppVersion = '0.5.0';
 
 /// 应用程序入口函数
 void main() {
@@ -115,9 +115,9 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
 
   /// 获取原生后端版本信息（异步，不阻塞界面）。
   ///
-  /// FFI 可用时 [PaddleOcr.getPlatformVersion] 返回原生库版本字符串
-  /// （形如 "pp_ocr 0.3.2"）；FFI 不可用回退 MethodChannel 时返回
-  /// 平台名（"Windows 10+" / "Linux"）。据此可判断当前生效的后端。
+  /// [PaddleOcr.getPlatformVersion] 优先返回原生库版本字符串（形如
+  /// "pp_ocr 0.5.0"）；原生库不可用时回退平台名（"Windows 10+" /
+  /// "Linux"）。据此可判断当前生效的后端与版本是否配套。
   Future<void> _loadBackendInfo() async {
     try {
       final v = await _ocr.getPlatformVersion();

@@ -3,9 +3,9 @@
 /// 本插件使用 PaddleOCR PP-OCRv6 模型提供文字检测与识别能力，
 /// 完全在 Windows 上离线运行。
 ///
-/// 插件支持两种后端：
-/// - **FFI**（默认）：通过 `dart:ffi` 直接调用原生库，延迟更低
-/// - **MethodChannel**（回退）：当 FFI DLL 不可用时使用
+/// 插件的识别链路只走 **FFI**（`dart:ffi` 直连原生库）——整图字节跨
+/// MethodChannel 序列化的开销不可接受，因此没有回退路径；原生库不可用
+/// 时直接抛错。MethodChannel 仅承载 FFI 做不到的事（原生文件对话框）。
 ///
 /// ## 快速开始
 ///
@@ -39,6 +39,7 @@
 library;
 
 export 'src/ocr_options.dart';
+export 'src/ocr_preprocessor.dart';
 export 'src/ocr_result.dart';
 export 'paddle_ocr_platform_interface.dart' show PaddleOcrPlatform;
 
@@ -47,6 +48,7 @@ import 'dart:typed_data';
 import 'paddle_ocr_platform_interface.dart';
 import 'pp_ocr_ffi.dart';
 import 'src/ocr_options.dart';
+import 'src/ocr_preprocessor.dart';
 import 'src/ocr_result.dart';
 
 /// PP-OCR 插件的主入口类。
@@ -108,6 +110,33 @@ class PaddleOcr {
     OcrOptions? options,
   }) {
     return _impl.recognizeImageBytes(imageBytes, options: options);
+  }
+
+  /// 用宿主注入的预处理变体跑编排管线（预处理插件接口）。
+  ///
+  /// 完整识别接口固定使用内置分支；本方法允许宿主注入任意预处理：
+  ///
+  /// ```dart
+  /// final results = await ocr.runPipeline(imageBytes, [
+  ///   upscalePreprocessor(times: 3),          // 内置 3x 放大
+  ///   whiteTextPreprocessor(),                // 内置白字字幕提取
+  ///   CustomTransformPreprocessor(            // 宿主自定义（如超分模型）
+  ///     (bytes) => mySuperResolutionModel(bytes),
+  ///     name: 'superres',
+  ///     scale: 2.0,
+  ///   ),
+  /// ], options: OcrOptions.preset(OcrPreset.surveillance));
+  /// ```
+  ///
+  /// 管线流程：每路变体检测 → 框合并为识别窗 → 每个窗在
+  /// 「底图 + 识别源变体」上择优识别。二值化类变体（[recSource] 为
+  /// false）只参与召回，不参与识别。
+  Future<List<OcrResult>> runPipeline(
+    Uint8List imageBytes,
+    List<OcrPreprocessor> preprocessors, {
+    OcrOptions? options,
+  }) {
+    return _impl.runPipeline(imageBytes, preprocessors, options: options);
   }
 
   /// 按预设识别图片文件。

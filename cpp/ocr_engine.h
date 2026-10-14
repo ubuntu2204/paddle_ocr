@@ -142,6 +142,37 @@ class OcrEngine {
   std::vector<OcrBoxResult> RecognizeFromFile(const std::string& image_path,
                                                const OcrOptions& options);
 
+  // =========================================================================
+  // 原子操作（供宿主 App 编排自定义识别管线用）
+  //
+  // 完整管线（Recognize*）固定使用内置预处理分支；宿主若想注入自己的
+  // 预处理（超分、色彩域提取、去雾……），可以把图变体准备好后用下面
+  // 四个原子步骤自行编排「多路检测 → 合并 → 择优识别」，与 C++ 内部
+  // 管线共享同一套模型与几何后处理实现。
+  // =========================================================================
+
+  // 原子 1：对一张（已预处理的）图跑文本检测。框坐标在**输入图**坐标系。
+  std::vector<DetectedBox> DetectOnImage(const cv::Mat& image,
+                                         const DetectParams& params);
+  // 原子 2：合并多路检测框（去重 + 同行拼接 + 外扩 + 排序）。
+  // box 坐标必须在**同一张底图**坐标系（不同分支的框请先换算回去）。
+  std::vector<MergedBox> MergeRegions(const std::vector<DetectedBox>& boxes,
+                                      const MergeParams& params,
+                                      int image_width, int image_height);
+  // 原子 3：在指定图上识别一个文本区域。enhance_crops 择优语义与完整
+  // 管线一致（0/1/2）。
+  std::pair<std::string, float> RecognizeBox(
+      const cv::Mat& image, const std::vector<cv::Point>& box,
+      const RecognizeParams& params);
+  // 原子 4：对一张图跑内置预处理（宿主把结果编码回字节流交给自己的
+  // 流程，或者直接拿去 DetectOnImage）。
+  cv::Mat ApplyImageTransform(const cv::Mat& image,
+                              const PreprocessParams& params);
+  // 多变体择优打分（与完整管线同款公式）。宿主编排时用它选最优候选。
+  static double ScoreVariant(int32_t variant_select, const std::string& text,
+                             float confidence, double long_side,
+                             double short_side, bool raw_crop);
+
   // 解码图片字节为 cv::Mat；失败返回空 Mat。供上层与测试复用。
   static cv::Mat DecodeImageBytes(const std::vector<uint8_t>& image_bytes);
 

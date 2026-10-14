@@ -4,19 +4,20 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'pp_ocr_ffi.dart';
 import 'src/ocr_options.dart';
+import 'src/ocr_preprocessor.dart';
 import 'src/ocr_result.dart';
 
 /// pp_ocr 插件的平台接口。
 ///
-/// 默认实现使用 FFI（dart:ffi）直接调用原生库。
-/// 当 FFI 不可用时（例如找不到 DLL），会自动回退到 MethodChannel。
+/// 唯一实现是 [FfiPaddleOcr]（dart:ffi 直连原生库）；识别链路不存在
+/// MethodChannel 回退 —— 整图字节跨通道序列化的开销不可接受。
 abstract class PaddleOcrPlatform extends PlatformInterface {
   PaddleOcrPlatform() : super(token: _token);
 
   /// 平台接口令牌，用于验证子类合法性。
   static final Object _token = Object();
 
-  // 默认：优先尝试 FFI，FFI 内部会回退到 MethodChannel。
+  // 默认实现。
   static PaddleOcrPlatform _instance = FfiPaddleOcr();
 
   /// 获取当前平台接口实例。
@@ -50,11 +51,18 @@ abstract class PaddleOcrPlatform extends PlatformInterface {
     OcrOptions? options,
   });
 
-  /// 设置引擎级默认选项：此后不传 options 的识别调用都会用它。
+  /// 用宿主注入的预处理变体跑编排管线（插件接口）。
   ///
-  /// 适合宿主 App 启动时按业务场景（监控、文档、车牌）配置一次，
-  /// 之后所有调用点保持干净。默认实现抛 [UnimplementedError]，
-  /// 由各平台实现覆盖；不支持的实现应返回 false 而不是崩溃。
+  /// 每个预处理产出一个变体图；管线对全部变体并行检测、合并为识别窗、
+  /// 再对每个窗在「底图 + 识别源变体」上择优识别。详见
+  /// [OcrPreprocessor]。
+  Future<List<OcrResult>> runPipeline(
+    Uint8List imageBytes,
+    List<OcrPreprocessor> preprocessors, {
+    OcrOptions? options,
+  });
+
+  /// 设置引擎级默认选项：此后不传 options 的识别调用都会用它。
   Future<bool> setDefaultOptions(OcrOptions options) async {
     throw UnimplementedError('setDefaultOptions() is not implemented');
   }

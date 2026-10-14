@@ -98,6 +98,7 @@ void FillDefaultMerge(MergeParams* p) {
   p->line_max_height_diff_ratio = 0.45;
   p->line_max_width_ratio = 4.0;
   p->region_pad_ratio = 0.0;
+  p->region_pad_long_ratio = 0.0;
   p->max_regions = 0;
   p->sort_order = 0;
 }
@@ -153,6 +154,9 @@ OcrOptions MakePresetOptions(int32_t preset) {
       o.merge.line_max_width_ratio = 6.0;
       // 外扩 0.3 倍字高：把贴边的单横字（「一」）纳回裁剪区。
       o.merge.region_pad_ratio = 0.30;
+      // 行向外扩 1.2 倍字高：检测框紧邻的孤立字（行首「一」等）DB 检测
+      // 无响应，靠识别窗延伸找回（实测 1.0 起效，取 1.2 留余量）。
+      o.merge.region_pad_long_ratio = 1.2;
       // 增强与不增强都跑，由「字符数 × 置信度」择优；
       // 否则自适应二值化会把时间戳里的短横吃掉。
       o.rec.enhance_crops = 2;
@@ -181,6 +185,7 @@ OcrOptions MakePresetOptions(int32_t preset) {
       o.merge.merge_contain_threshold = 0.65;
       o.merge.line_max_gap_ratio = 0.80;
       o.merge.region_pad_ratio = 0.30;
+      o.merge.region_pad_long_ratio = 1.2;
       o.rec.enhance_crops = 2;
       o.rec.try_all_branches = 1;
       o.det.thresh = 0.22;
@@ -277,6 +282,7 @@ int32_t SanitizeOptions(OcrOptions* o) {
   fix_double(o->merge.line_max_height_diff_ratio, 0.05, 5.0, 0.45);
   fix_double(o->merge.line_max_width_ratio, 1.0, 50.0, 4.0);
   fix_double(o->merge.region_pad_ratio, 0.0, 2.0, 0.0);
+  fix_double(o->merge.region_pad_long_ratio, 0.0, 5.0, 0.0);
   fix_int(o->merge.max_regions, 0, 10000, 0);
   fix_int(o->merge.sort_order, 0, 2, 0);
 
@@ -317,6 +323,7 @@ std::string BranchFlagsName(uint32_t branches) {
       {kBranchOtsuBin, "otsu_bin"},
       {kBranchClahe, "clahe"},
       {kBranchUpscale2x, "upscale2x"},
+      {kBranchUpscale3x, "upscale3x"},
       {kBranchSensitive, "sensitive"},
       {kBranchSharpen, "sharpen"},
       {kBranchDenoiseClahe, "denoise_clahe"},
@@ -393,6 +400,8 @@ OcrOptions OptionsFromMapLookup(const MapLookup& lookup) {
       g.get_double("lineMaxWidthRatio", o.merge.line_max_width_ratio);
   o.merge.region_pad_ratio =
       g.get_double("regionPadRatio", o.merge.region_pad_ratio);
+  o.merge.region_pad_long_ratio =
+      g.get_double("regionPadLongRatio", o.merge.region_pad_long_ratio);
   o.merge.max_regions = g.get_int("maxRegions", o.merge.max_regions);
   o.merge.sort_order = g.get_int("sortOrder", o.merge.sort_order);
 

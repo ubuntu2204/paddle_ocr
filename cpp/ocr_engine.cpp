@@ -1142,6 +1142,14 @@ BranchConfig MakeBranchConfig(uint32_t flag, const OcrOptions& base) {
       cfg.det.max_side_len = base.det.max_side_len * 2;
       break;
 
+    case kBranchUpscale3x:
+      // 3 倍放大：20px 级小字在 2x 下仍会偶发繁简误读（篮→籃），
+      // 3x 时笔画细节充足。速度比 2x 慢一档，按需开启。
+      cfg.name = "upscale3x";
+      cfg.prep.scale_percent = 300;
+      cfg.det.max_side_len = base.det.max_side_len * 3;
+      break;
+
     case kBranchSensitive:
       // 不改变图像，只把检测阈值放宽，拾回临界响应的小字。
       // 图像与原图完全相同，因此也不需要再当一遍识别源。
@@ -1184,9 +1192,10 @@ BranchConfig MakeBranchConfig(uint32_t flag, const OcrOptions& base) {
 // 分支顺序固定，保证同一 mask 在任何平台得列同样的 branch_index。
 std::vector<BranchConfig> BuildBranchConfigs(const OcrOptions& options) {
   static const uint32_t kOrder[] = {
-      kBranchRaw,       kBranchAdaptiveBin, kBranchOtsuBin,
-      kBranchClahe,     kBranchUpscale2x,   kBranchSensitive,
-      kBranchSharpen,   kBranchDenoiseClahe, kBranchWhiteText,
+      kBranchRaw,        kBranchAdaptiveBin,  kBranchOtsuBin,
+      kBranchClahe,      kBranchUpscale2x,    kBranchUpscale3x,
+      kBranchSensitive,  kBranchSharpen,      kBranchDenoiseClahe,
+      kBranchWhiteText,
   };
   std::vector<BranchConfig> out;
   for (uint32_t flag : kOrder) {
@@ -1220,6 +1229,72 @@ void OcrEngine::SetDefaultOptions(const OcrOptions& options) {
 void OcrEngine::ClearDefaultOptions() {
   FillDefaultOptions(&default_options_);
   has_explicit_default_ = false;
+}
+
+// ===========================================================================
+// OcrEngine：原子操作（宿主编排自定义管线用）
+// ===========================================================================
+
+std::vector<DetectedBox> OcrEngine::DetectOnImage(const cv::Mat& image,
+                                                  const DetectParams& params) {
+  if (!initialized_ || image.empty()) return {};
+  DetectParams p = params;
+  p.struct_size = static_cast<int32_t>(sizeof(DetectParams));
+  return detector_.DetectScored(image, p, 0);
+}
+
+// 合并 + 拼接 + 识别窗构造（RunPipeline 与原子操作共用的收尾流程）。
+// 输出的 points 已经是「识别窗」：基底取最贴合字带的成员框，含四周与
+// 行向外扩，可直接裁剪喂识别器。
+static std::vector<MergedBox> MergeAndBuildWindows(
+    const std::vector<DetectedBox>& boxes, const MergeParams& m,
+    int image_width, int image_height) {
+  std::vector<MergedBox> regions = MergeDetectedBoxes(boxes, m);
+  regions = StitchSameLine(regions, m);
+  for (auto& region : regions) {
+    if (region.points.size() < 3) continue;
+    region.points = BuildRecognitionWindow(region, m.region_pad_ratio,
+                                           m.region_pad_long_ratio,
+                                           image_width, image_height);
+  }
+  SortBoxesForReadingOrder(&regions, m.sort_order);
+  if (m.max_regions > 0 &&
+      static_cast<int>(regions.size()) > m.max_regions) {
+    regions.resize(static_cast<size_t>(m.max_regions));
+  }
+  return regions;
+}
+
+std::vector<MergedBox> OcrEngine::MergeRegions(
+    const std::vector<DetectedBox>& boxes, const MergeParams& params,
+    int image_width, int image_height) {
+  MergeParams m = params;
+  m.struct_size = static_cast<int32_t>(sizeof(MergeParams));
+  return MergeAndBuildWindows(boxes, m, image_width, image_height);
+}
+
+std::pair<std::string, float> OcrEngine::RecognizeBox(
+    const cv::Mat& image, const std::vector<cv::Point>& box,
+    const RecognizeParams& params) {
+  if (!initialized_ || image.empty() || box.size() < 3) return {"", 0.0f};
+  RecognizeParams p = params;
+  p.struct_size = static_cast<int32_t>(sizeof(RecognizeParams));
+  return recognizer_.RecognizeRegion(image, box, p);
+}
+
+cv::Mat OcrEngine::ApplyImageTransform(const cv::Mat& image,
+                                       const PreprocessParams& params) {
+  if (image.empty()) return image;
+  PreprocessParams p = params;
+  p.struct_size = static_cast<int32_t>(sizeof(PreprocessParams));
+  return ApplyPreprocess(image, p);
+}
+
+double OcrEngine::ScoreVariant(int32_t variant_select, const std::string& text,
+                               float confidence, double long_side,
+                               double short_side, bool raw_crop) {
+  return VariantSelectionScore(variant_select, text, confidence, long_side,
+                               short_side, raw_crop);
 }
 
 // ===========================================================================
@@ -1390,21 +1465,9 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
     return {};
   }
 
-  // 步骤2：跨分支合并
-  std::vector<MergedBox> regions = MergeDetectedBoxes(all_boxes, options.merge);
-
-  // 步骤3：同行拼接
-  regions = StitchSameLine(regions, options.merge);
-
-  // 步骤3.5：区域外扩，把贴边笔画纳回裁剪区
-  PadRegions(&regions, options.merge.region_pad_ratio, image.cols, image.rows);
-
-  // 排序 + 截断
-  SortBoxesForReadingOrder(&regions, options.merge.sort_order);
-  if (options.merge.max_regions > 0 &&
-      static_cast<int>(regions.size()) > options.merge.max_regions) {
-    regions.resize(static_cast<size_t>(options.merge.max_regions));
-  }
+  // 步骤2~3.5：合并 + 同行拼接 + 识别窗构造（成员基底 + 双向外扩）。
+  std::vector<MergedBox> regions =
+      MergeAndBuildWindows(all_boxes, options.merge, image.cols, image.rows);
 
   // 步骤4：择优识别
   std::vector<OcrBoxResult> results;
@@ -1426,17 +1489,21 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
     const MergedBox& region = regions[ri];
     if (region.points.size() < 3) continue;
 
+    // region.points 已经是识别窗（成员基底 + 双向外扩，见
+    // MergeAndBuildWindows），直接用于裁剪识别。
+    const std::vector<cv::Point>& rec_window = region.points;
+
     std::string best_text;
     float best_conf = 0.0f;
     double best_score = -std::numeric_limits<double>::infinity();
     std::string best_from;
-    // 打分用「外扩前」的参考几何：外扩后的短边含空白，会低估预期字数。
-    const double region_long = region.ref_long_side > 0.0
-                                   ? region.ref_long_side
-                                   : BoxLongSide(region.points);
-    const double region_short = region.ref_short_side > 0.0
-                                    ? region.ref_short_side
-                                    : BoxShortSide(region.points);
+    // 打分几何用「识别窗」：窗长边是候选文本的真实可用宽度；短边用
+    // 成员统计出的字高（union 短边被贴边碎片撑大后，expected_em 被
+    // 低估，会奖励「读少了」的候选、漏掉读全的候选）。
+    const double region_long = BoxLongSide(rec_window);
+    const double region_short =
+        region.text_height > 0.0 ? region.text_height
+                                 : BoxShortSide(rec_window);
 
     // 候选变体：原图 + 各分支图。try_all_branches 时连没检出该区域的
     // 分支也试 —— 放大分支往往能提供更多笔画细节。
@@ -1464,7 +1531,7 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
 
     for (const Variant& variant : variants) {
       const cv::Mat& src = *variant.img;
-      std::vector<cv::Point> box = ScaleBoxToBranch(region.points, variant.scale);
+      std::vector<cv::Point> box = ScaleBoxToBranch(rec_window, variant.scale);
       // 夹到图内，避免边缘框在放大图上越界导致 warpPerspective 取空。
       for (auto& pt : box) {
         pt.x = std::max(0, std::min(src.cols - 1, pt.x));
@@ -1480,7 +1547,17 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
         const double score =
             VariantSelectionScore(rp.variant_select, decoded.first,
                                   decoded.second, region_long, region_short,
-                                  /*raw_crop = */ enhance == 0);
+                                  /*raw_crop = */ enhance == 0) +
+            // 平局破除：PP-OCR 的 CTC 置信度极易饱和（不同变体都是
+            // 1.000），几何得分也可能完全相同。此时放大分支的候选拥有
+            // 更多笔画细节，实测比 1x 原图更可靠（1x 把「舍」读成
+            // 「合」，2x/3x 正确）。权重远小于几何差异，只做同分裁决。
+            0.001 * variant.scale;
+        OCR_LOG("RunPipeline: region[%zu] variant='%s%s' em=%.2f/%.2f "
+                "score=%.3f conf=%.3f '%s'",
+                ri, variant.label.c_str(), enhance ? "+enh" : "",
+                EstimateTextWidthInEm(decoded.first), region_long / region_short,
+                score, decoded.second, decoded.first.c_str());
         if (score > best_score) {
           best_score = score;
           best_text = std::move(decoded.first);

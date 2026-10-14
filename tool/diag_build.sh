@@ -4,6 +4,7 @@
 # 用法：
 #   tool/diag_build.sh diag    [模型目录] [图片路径]   # 各预设横向对比
 #   tool/diag_build.sh probe   [模型目录] [图片路径]   # 单分支 × 增强矩阵（ROI 探针）
+#   tool/diag_build.sh probe2  [模型目录] [图片路径]   # 条带 × 变换矩阵（找回「一舍」实验）
 #   tool/diag_build.sh buildonly                      # 只编译
 #
 # 依赖：libopencv-dev、仓库内 linux/third_party/onnxruntime/（见
@@ -44,21 +45,29 @@ what="${1:-both}"
 shift || true
 
 case "$what" in
-  diag|probe)
+  diag|probe|probe2|probe3|probe4|probe5)
     build_one "$what"
     ;;
   buildonly)
     build_one diag
     build_one probe
+    build_one probe2
+    build_one probe3
+    build_one probe4
+    build_one probe5
     exit 0
     ;;
   both)
     build_one diag
     build_one probe
+    build_one probe2
+    build_one probe3
+    build_one probe4
+    build_one probe5
     exit 0
     ;;
   *)
-    echo "未知参数：$what（可用：diag | probe | both | buildonly）" >&2
+    echo "未知参数：$what（可用：diag | probe | probe2 | probe3 | both | buildonly）" >&2
     exit 2
     ;;
 esac
@@ -66,6 +75,6 @@ esac
 export LD_PRELOAD="${LD_PRELOAD:-/usr/lib/x86_64-linux-gnu/libsqlite3.so.0}"
 export LD_LIBRARY_PATH="$ORT/lib:${LD_LIBRARY_PATH:-}"
 
-if [ "$what" = "diag" ] || [ "$what" = "probe" ]; then
+if [ "$what" = "diag" ] || [ "$what" = "probe" ] || [ "$what" = "probe2" ] || [ "$what" = "probe3" ] || [ "$what" = "probe4" ] || [ "$what" = "probe5" ]; then
   "$OUT/$what" "${1:-$REPO/model}" "${@:2}"
 fi

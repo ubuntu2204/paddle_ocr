@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pp_ocr/paddle_ocr_method_channel.dart';
 import 'package:pp_ocr/pp_ocr.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
@@ -51,6 +50,17 @@ class _RecorderPlatform
     OcrOptions? options,
   }) async {
     calls.add('recognizeImageBytes:${imageBytes.length}');
+    lastOptions = options;
+    return nextRecognizeResult;
+  }
+
+  @override
+  Future<List<OcrResult>> runPipeline(
+    Uint8List imageBytes,
+    List<OcrPreprocessor> preprocessors, {
+    OcrOptions? options,
+  }) async {
+    calls.add('runPipeline:${preprocessors.length}');
     lastOptions = options;
     return nextRecognizeResult;
   }
@@ -258,9 +268,13 @@ void main() {
     });
   });
 
-  // 与真实 MethodChannel 的兼容性冒烟（确保当 instance 是
-  // MethodChannelPaddleOcr 时也能被上层正常持有）。
-  test('MethodChannelPaddleOcr remains a valid platform subclass', () {
-    expect(MethodChannelPaddleOcr(), isA<PaddleOcrPlatform>());
+  group('PaddleOcr.runPipeline delegation', () {
+    test('forwards preprocessors and options', () async {
+      final ocr = PaddleOcr();
+      final bytes = Uint8List.fromList([1, 2, 3]);
+      final preprocessors = <OcrPreprocessor>[upscalePreprocessor()];
+      await ocr.runPipeline(bytes, preprocessors);
+      expect(recorder.calls.single, 'runPipeline:1');
+    });
   });
 }

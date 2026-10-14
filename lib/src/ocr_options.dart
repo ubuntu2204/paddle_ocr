@@ -107,7 +107,11 @@ enum OcrBranch {
 
   /// 白色叠加字幕提取 + 自适应二值化。
   /// 监控 / 直播画面漏检的主因就在这里。
-  whiteText(1 << 8);
+  whiteText(1 << 8),
+
+  /// 3 倍放大：2x 对 20px 级小字仍会偶发繁简误读（篮→籃），3x 下笔画
+  /// 细节充足、实测完全正确。比 2x 再慢一档，按需开启。
+  upscale3x(1 << 9);
 
   const OcrBranch(this.bit);
 
@@ -136,6 +140,7 @@ enum OcrBranch {
     adaptiveBinarize,
     clahe,
     upscale2x,
+    upscale3x,
     sensitive,
     denoiseClahe,
     whiteText,
@@ -148,6 +153,7 @@ enum OcrBranch {
     otsuBinarize,
     clahe,
     upscale2x,
+    upscale3x,
     sensitive,
     sharpen,
     denoiseClahe,
@@ -278,6 +284,7 @@ class OcrOptions {
     this.lineMaxHeightDiffRatio = 0.45,
     this.lineMaxWidthRatio = 4.0,
     this.regionPadRatio = 0.0,
+    this.regionPadLongRatio = 0.0,
     this.maxRegions = 0,
     this.sortOrder = ResultSortOrder.readingOrder,
     this.roiX = 0,
@@ -391,6 +398,13 @@ class OcrOptions {
   /// 区域外扩比例（相对字高）。用于把贴边的单横笔画纳回裁剪区。
   final double regionPadRatio;
 
+  /// 识别窗沿行方向向两侧外扩的比例（相对字高）。
+  ///
+  /// DB 检测对紧邻行的孤立字符（典型：单横「一」）没有响应，把识别窗
+  /// 沿行向延伸 1.0~1.5 倍字高后，CRNN 能把紧邻的字读出来。监控字幕
+  /// 实测 1.2 即可找回行首「一」。0 = 不延伸。
+  final double regionPadLongRatio;
+
   /// 最终结果数量上限，0 = 不限制。
   final int maxRegions;
 
@@ -472,6 +486,7 @@ class OcrOptions {
       lineMaxHeightDiffRatio: s.lineMaxHeightDiffRatio,
       lineMaxWidthRatio: s.lineMaxWidthRatio,
       regionPadRatio: s.regionPadRatio,
+      regionPadLongRatio: s.regionPadLongRatio,
       maxRegions: s.maxRegions,
       sortOrder: ResultSortOrder.fromValue(s.sortOrder),
       roiX: s.roiX,
@@ -516,6 +531,7 @@ class OcrOptions {
     double? lineMaxHeightDiffRatio,
     double? lineMaxWidthRatio,
     double? regionPadRatio,
+    double? regionPadLongRatio,
     int? maxRegions,
     ResultSortOrder? sortOrder,
     int? roiX,
@@ -560,6 +576,7 @@ class OcrOptions {
           lineMaxHeightDiffRatio ?? this.lineMaxHeightDiffRatio,
       lineMaxWidthRatio: lineMaxWidthRatio ?? this.lineMaxWidthRatio,
       regionPadRatio: regionPadRatio ?? this.regionPadRatio,
+      regionPadLongRatio: regionPadLongRatio ?? this.regionPadLongRatio,
       maxRegions: maxRegions ?? this.maxRegions,
       sortOrder: sortOrder ?? this.sortOrder,
       roiX: roiX ?? this.roiX,
@@ -612,6 +629,7 @@ class OcrOptions {
     s.lineMaxHeightDiffRatio = lineMaxHeightDiffRatio;
     s.lineMaxWidthRatio = lineMaxWidthRatio;
     s.regionPadRatio = regionPadRatio;
+    s.regionPadLongRatio = regionPadLongRatio;
     s.maxRegions = maxRegions;
     s.sortOrder = sortOrder.value;
     s.roiX = roiX;
@@ -628,105 +646,6 @@ class OcrOptions {
     return ptr;
   }
 
-  /// 转成 MethodChannel 用的 map（FFI 不可用时的回退路径）。
-  ///
-  /// 数值统一用 int / double，便于标准 codec 传输；布尔量压成 0/1，
-  /// 与原生侧结构体里的 int32 字段语义保持一致。
-  Map<String, Object> toMap() => <String, Object>{
-    'detThresh': detThresh,
-    'detBoxThresh': detBoxThresh,
-    'detUnclipRatio': detUnclipRatio,
-    'detMaxSideLen': detMaxSideLen,
-    'detMinBoxSize': detMinBoxSize,
-    'detMinBoxArea': detMinBoxArea,
-    'recImgHeight': recImgHeight,
-    'recMaxImgWidth': recMaxImgWidth,
-    'recEnhanceCrops': recEnhanceCrops,
-    'recTryAllBranches': recTryAllBranches ? 1 : 0,
-    'recMinConfidence': recMinConfidence,
-    'recVariantSelect': variantSelection.value,
-    'cropBinarizeMode': cropBinarizeMode.value,
-    'cropAdaptiveBlockSize': cropAdaptiveBlockSize,
-    'cropAdaptiveC': cropAdaptiveC,
-    'cropEnhanceMode': cropEnhanceMode.value,
-    'cropClaheClipLimit': cropClaheClipLimit,
-    'cropClaheGridSize': cropClaheGridSize,
-    'cropSharpenAmount': cropSharpenAmount,
-    'cropMorphCloseKernel': cropMorphCloseKernel,
-    'cropMorphOpenKernel': cropMorphOpenKernel,
-    'cropColorMode': cropColorMode.value,
-    'branches': branchMask,
-    'mergeIouThreshold': mergeIouThreshold,
-    'mergeContainThreshold': mergeContainThreshold,
-    'stitchSameLine': stitchSameLine ? 1 : 0,
-    'lineMinYOverlap': lineMinYOverlap,
-    'lineMaxGapRatio': lineMaxGapRatio,
-    'lineMaxHeightDiffRatio': lineMaxHeightDiffRatio,
-    'lineMaxWidthRatio': lineMaxWidthRatio,
-    'regionPadRatio': regionPadRatio,
-    'maxRegions': maxRegions,
-    'sortOrder': sortOrder.value,
-    'roiX': roiX,
-    'roiY': roiY,
-    'roiW': roiW,
-    'roiH': roiH,
-    'verboseStats': verboseStats ? 1 : 0,
-    if (sourcePreset != null) 'sourcePreset': sourcePreset!.id,
-  };
-
-  /// 从 MethodChannel 的 map 还原。缺失的键取标准默认值。
-  static OcrOptions fromMap(Map<Object?, Object?> m) {
-    double d(Object? v, double f) => v is num ? v.toDouble() : f;
-    int i(Object? v, int f) => v is num ? v.toInt() : f;
-    final presetId = m['sourcePreset'];
-    return OcrOptions(
-      detThresh: d(m['detThresh'], 0.30),
-      detBoxThresh: d(m['detBoxThresh'], 0.50),
-      detUnclipRatio: d(m['detUnclipRatio'], 1.5),
-      detMaxSideLen: i(m['detMaxSideLen'], 960),
-      detMinBoxSize: i(m['detMinBoxSize'], 3),
-      detMinBoxArea: i(m['detMinBoxArea'], 0),
-      recImgHeight: i(m['recImgHeight'], 48),
-      recMaxImgWidth: i(m['recMaxImgWidth'], 2048),
-      recEnhanceCrops: i(m['recEnhanceCrops'], 0),
-      recTryAllBranches: i(m['recTryAllBranches'], 1) != 0,
-      recMinConfidence: d(m['recMinConfidence'], 0.0),
-      variantSelection: VariantSelection.fromValue(i(m['recVariantSelect'], 4)),
-      cropBinarizeMode: BinarizeMode.fromValue(i(m['cropBinarizeMode'], 3)),
-      cropAdaptiveBlockSize: i(m['cropAdaptiveBlockSize'], 0),
-      cropAdaptiveC: d(m['cropAdaptiveC'], 5.0),
-      cropEnhanceMode: EnhanceMode.fromValue(i(m['cropEnhanceMode'], 0)),
-      cropClaheClipLimit: d(m['cropClaheClipLimit'], 2.0),
-      cropClaheGridSize: i(m['cropClaheGridSize'], 8),
-      cropSharpenAmount: d(m['cropSharpenAmount'], 1.0),
-      cropMorphCloseKernel: i(m['cropMorphCloseKernel'], 0),
-      cropMorphOpenKernel: i(m['cropMorphOpenKernel'], 0),
-      cropColorMode: ColorMode.fromValue(i(m['cropColorMode'], 0)),
-      branches: OcrBranch.branchesOf(i(m['branches'], OcrBranch.raw.bit)),
-      mergeIouThreshold: d(m['mergeIouThreshold'], 0.30),
-      mergeContainThreshold: d(m['mergeContainThreshold'], 0.75),
-      stitchSameLine: i(m['stitchSameLine'], 0) != 0,
-      lineMinYOverlap: d(m['lineMinYOverlap'], 0.55),
-      lineMaxGapRatio: d(m['lineMaxGapRatio'], 0.60),
-      lineMaxHeightDiffRatio: d(m['lineMaxHeightDiffRatio'], 0.45),
-      lineMaxWidthRatio: d(m['lineMaxWidthRatio'], 4.0),
-      regionPadRatio: d(m['regionPadRatio'], 0.0),
-      maxRegions: i(m['maxRegions'], 0),
-      sortOrder: ResultSortOrder.fromValue(i(m['sortOrder'], 0)),
-      roiX: i(m['roiX'], 0),
-      roiY: i(m['roiY'], 0),
-      roiW: i(m['roiW'], 0),
-      roiH: i(m['roiH'], 0),
-      verboseStats: i(m['verboseStats'], 0) != 0,
-      sourcePreset: presetId is int
-          ? OcrPreset.values.firstWhere(
-              (p) => p.id == presetId,
-              orElse: () => OcrPreset.standard,
-            )
-          : null,
-    );
-  }
-
   @override
   String toString() =>
       'OcrOptions(preset: ${sourcePreset?.name ?? 'custom'}, '
@@ -734,6 +653,7 @@ class OcrOptions {
       'det(thresh: $detThresh, box: $detBoxThresh, unclip: $detUnclipRatio, '
       'maxSide: $detMaxSideLen), '
       'stitch: $stitchSameLine, pad: $regionPadRatio, '
+      'padLong: $regionPadLongRatio, '
       'enhanceCrops: $recEnhanceCrops, '
       'roi: ${hasRoi ? '$roiX,$roiY,$roiW,$roiH' : 'full'})';
 }

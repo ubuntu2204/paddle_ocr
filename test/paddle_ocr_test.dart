@@ -35,6 +35,13 @@ class MockPaddleOcrPlatform
   }) => Future.value([]);
 
   @override
+  Future<List<OcrResult>> runPipeline(
+    Uint8List imageBytes,
+    List<OcrPreprocessor> preprocessors, {
+    OcrOptions? options,
+  }) => Future.value([]);
+
+  @override
   Future<bool> setDefaultOptions(OcrOptions options) async => true;
 
   @override
@@ -49,7 +56,7 @@ void main() {
   final PaddleOcrPlatform initialPlatform = PaddleOcrPlatform.instance;
 
   group('Platform interface', () {
-    // 默认实例为 FfiPaddleOcr（内部会自动回退到 MethodChannel）。
+    // 默认实例为 FfiPaddleOcr（识别链路只走 FFI）。
     test('$FfiPaddleOcr is the default instance', () {
       expect(initialPlatform, isInstanceOf<FfiPaddleOcr>());
     });
@@ -166,6 +173,13 @@ class _ExtendsPlatform extends PaddleOcrPlatform {
   @override
   Future<List<OcrResult>> recognizeImageBytes(
     Uint8List imageBytes, {
+    OcrOptions? options,
+  }) => Future.value([]);
+
+  @override
+  Future<List<OcrResult>> runPipeline(
+    Uint8List imageBytes,
+    List<OcrPreprocessor> preprocessors, {
     OcrOptions? options,
   }) => Future.value([]);
 

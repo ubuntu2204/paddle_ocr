@@ -4,17 +4,19 @@ import 'dart:ui';
 
 import 'package:ffi/ffi.dart';
 
-import 'paddle_ocr_method_channel.dart';
+import 'paddle_ocr_plugin_channel.dart';
 import 'paddle_ocr_platform_interface.dart';
 import 'src/ocr_options.dart';
+import 'src/ocr_pipeline.dart';
+import 'src/ocr_preprocessor.dart';
 import 'src/ocr_result.dart';
 import 'src/pp_ocr_ffi_bindings.dart';
 
-/// [PaddleOcrPlatform] 的 FFI 实现。
+/// [PaddleOcrPlatform] 的唯一实现：FFI（dart:ffi）直连原生库。
 ///
-/// 这是 Windows / Linux 平台的默认实现。它通过 dart:ffi 直接与原生 C++
-/// 库通信，避免了 MethodChannel 的开销。当 FFI 不可用时（例如找不到
-/// DLL / so），会自动回退到 [MethodChannelPaddleOcr]。
+/// 识别链路没有任何回退 —— MethodChannel 传输整图字节的序列化开销
+/// 不可接受，也不再保留降级桩。原生库加载失败时错误会直接抛给调用方，
+/// 便于第一时间暴露部署问题（缺 DLL / so、架构不匹配等）。
 class FfiPaddleOcr extends PaddleOcrPlatform {
   FfiPaddleOcr();
 
@@ -24,19 +26,12 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
   /// FFI 是否可用的标志位。
   bool _ffiAvailable = false;
 
-  /// MethodChannel 回退实现，按需创建。
-  MethodChannelPaddleOcr? _fallback;
+  /// 依赖插件注册器的小功能（文件对话框 / 平台信息）。
+  PluginChannelPaddleOcr get _pluginChannel =>
+      _pluginChannelInstance ??= PluginChannelPaddleOcr();
+  PluginChannelPaddleOcr? _pluginChannelInstance;
 
-  /// 尝试使用 FFI；若 DLL 无法加载，则回退到 MethodChannel。
-  PaddleOcrPlatform _getImpl() {
-    if (_ffiAvailable && _engine != null && _engine != nullptr) {
-      return this;
-    }
-    _fallback ??= MethodChannelPaddleOcr();
-    return _fallback!;
-  }
-
-  /// 确保引擎已创建，若创建失败则标记 FFI 不可用。
+  /// 确保引擎已创建。原生库不可用时抛 [StateError]。
   void _ensureEngine() {
     if (_engine != null) return;
     try {
@@ -46,7 +41,22 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     } catch (e) {
       _ffiAvailable = false;
       _engine = nullptr;
+      throw StateError(
+        'pp_ocr native library is not available: $e. '
+        '识别链路只支持 FFI，请检查原生库（pp_ocr_plugin.dll / '
+        'libpp_ocr_plugin.so）是否随应用正确分发。',
+      );
     }
+  }
+
+  /// FFI 引擎指针；未初始化时抛 [StateError]。
+  Pointer<Void> get _requiredEngine {
+    _ensureEngine();
+    final engine = _engine;
+    if (!_ffiAvailable || engine == null || engine == nullptr) {
+      throw StateError('pp_ocr native engine is not available');
+    }
+    return engine;
   }
 
   @override
@@ -55,23 +65,9 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     required String recModelPath,
     required String dictPath,
   }) async {
-    _ensureEngine();
-    if (!_ffiAvailable || _engine == null || _engine == nullptr) {
-      return _getImpl().initialize(
-        detModelPath: detModelPath,
-        recModelPath: recModelPath,
-        dictPath: dictPath,
-      );
-    }
-
-    final engine = _engine!;
+    final engine = _requiredEngine;
     final bindings = PpOcrFfiBindings.instance;
-    final ok = bindings.initialize(
-      engine,
-      detModelPath,
-      recModelPath,
-      dictPath,
-    );
+    final ok = bindings.initialize(engine, detModelPath, recModelPath, dictPath);
     if (!ok) {
       final err = bindings.getLastError(engine);
       // ignore: avoid_print
@@ -85,15 +81,7 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     String imagePath, {
     OcrOptions? options,
   }) async {
-    if (!_ffiAvailable) {
-      return _getImpl().recognizeImage(imagePath, options: options);
-    }
-    _ensureEngine();
-    if (_engine == null || _engine == nullptr) {
-      return _getImpl().recognizeImage(imagePath, options: options);
-    }
-
-    final engine = _engine!;
+    final engine = _requiredEngine;
     final bindings = PpOcrFfiBindings.instance;
     final PpOcrResultArrayC resultC;
     if (options == null) {
@@ -120,15 +108,7 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     Uint8List imageBytes, {
     OcrOptions? options,
   }) async {
-    if (!_ffiAvailable) {
-      return _getImpl().recognizeImageBytes(imageBytes, options: options);
-    }
-    _ensureEngine();
-    if (_engine == null || _engine == nullptr) {
-      return _getImpl().recognizeImageBytes(imageBytes, options: options);
-    }
-
-    final engine = _engine!;
+    final engine = _requiredEngine;
     final bindings = PpOcrFfiBindings.instance;
     final PpOcrResultArrayC resultC;
     if (options == null) {
@@ -153,19 +133,16 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
   /// 把选项设为引擎级默认。
   @override
   Future<bool> setDefaultOptions(OcrOptions options) async {
-    _ensureEngine();
-    if (!_ffiAvailable || _engine == null || _engine == nullptr) {
-      return _getImpl().setDefaultOptions(options);
-    }
+    final engine = _requiredEngine;
     final bindings = PpOcrFfiBindings.instance;
     final optsPtr = options.toNativeStruct();
     try {
-      final ok = bindings.setDefaultOptions(_engine!, optsPtr);
+      final ok = bindings.setDefaultOptions(engine, optsPtr);
       if (!ok) {
         // ignore: avoid_print
         print(
           '[pp_ocr] setDefaultOptions failed: '
-          '${bindings.getLastError(_engine!)}',
+          '${bindings.getLastError(engine)}',
         );
       }
       return ok;
@@ -174,12 +151,27 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     }
   }
 
+  /// 用宿主注入的预处理变体跑编排管线（插件接口）。
+  @override
+  Future<List<OcrResult>> runPipeline(
+    Uint8List imageBytes,
+    List<OcrPreprocessor> preprocessors, {
+    OcrOptions? options,
+  }) async {
+    final engine = _requiredEngine;
+    final bindings = PpOcrFfiBindings.instance;
+    return runOcrPipeline(
+      bindings: bindings,
+      engine: engine,
+      imageBytes: imageBytes,
+      preprocessors: preprocessors,
+      options: options ?? OcrOptions.preset(OcrPreset.surveillance),
+    );
+  }
+
   @override
   void clearDefaultOptions() {
-    if (!_ffiAvailable || _engine == null || _engine == nullptr) {
-      _getImpl().clearDefaultOptions();
-      return;
-    }
+    if (_engine == null || _engine == nullptr || !_ffiAvailable) return;
     try {
       PpOcrFfiBindings.instance.clearDefaultOptions(_engine!);
     } catch (_) {
@@ -187,34 +179,21 @@ class FfiPaddleOcr extends PaddleOcrPlatform {
     }
   }
 
-  /// 对于需要 Flutter 插件注册器的功能（例如原生文件对话框），
-  /// 始终使用 MethodChannel。FFI 无法弹出文件选择框，因此不能
-  /// 通过 [_getImpl] 路由（当 FFI 激活时它会返回 [this]，
-  /// 会导致无限递归）。
-  MethodChannelPaddleOcr get _methodChannel =>
-      _fallback ??= MethodChannelPaddleOcr();
-
   @override
-  Future<String?> pickImage() async {
-    // pickImage 使用原生文件对话框（Windows: GetOpenFileNameW；
-    // Linux: GtkFileChooserDialog），仅限 MethodChannel。
-    return _methodChannel.pickImage();
-  }
+  Future<String?> pickImage() => _pluginChannel.pickImage();
 
   @override
   Future<String?> getPlatformVersion() async {
-    // 先确保引擎已创建：本方法常在 initialize 之前被调用（如界面启动时
-    // 展示原生库版本），若不 ensure，_ffiAvailable 恒为 false，会永远走
-    // MethodChannel 分支而查不到真实的原生库版本。
+    // 优先读原生库版本（真实版本核对），失败再问平台。
     _ensureEngine();
-    if (_ffiAvailable) {
+    if (_ffiAvailable && _engine != null && _engine != nullptr) {
       try {
         return PpOcrFfiBindings.instance.version();
       } catch (_) {
-        // 回退到 MethodChannel
+        // 继续走平台查询。
       }
     }
-    return _methodChannel.getPlatformVersion();
+    return _pluginChannel.getPlatformVersion();
   }
 
   /// 将 C 结果数组解析为 Dart [OcrResult] 列表。

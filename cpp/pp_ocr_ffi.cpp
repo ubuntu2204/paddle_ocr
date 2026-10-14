@@ -2,6 +2,7 @@
 #include "ocr_engine.h"
 #include "debug_utils.h"
 
+#include <cmath>
 #include <string>
 #include <vector>
 #include <cstring>
@@ -11,7 +12,7 @@
 // ---------------------------------------------------------------------------
 // 与根 pubspec.yaml 的 version 保持同步；example 界面会显示该字符串，
 // 用于核对 Dart 包与原生库的版本是否配套。
-static const char* kVersion = "pp_ocr 0.4.0";
+static const char* kVersion = "pp_ocr 0.5.0";
 
 // ---------------------------------------------------------------------------
 // 引擎包装器：持有 C++ OcrEngine 实例及可复用的结果缓冲区
@@ -23,6 +24,14 @@ struct PpOcrEngine {
   std::vector<PpOcrResultItem> result_items;  // 结果项数组
   std::vector<std::string> text_buffers;      // 保持文本字符串存活，防止 c_str() 指针失效
   PpOcrResultArray result_array;              // 返回给调用方的结果数组
+
+  // 原子操作的可复用缓冲区（下一次调用前有效）。
+  std::vector<uint8_t> image_buffer;        // preprocess 输出（PNG 字节）
+  std::vector<PpOcrBoxInput> box_buffer;    // detect/merge 输出
+  std::string single_text_buffer;           // recognize_box 输出
+  PpOcrBoxArray box_array{};                // 返回给调用方的框数组
+  PpOcrImageBuffer image_out{};             // 返回给调用方的图像缓冲
+  PpOcrTextResult text_out{};               // 返回给调用方的文本结果
 };
 
 // ---------------------------------------------------------------------------
@@ -126,6 +135,7 @@ static void OptionsFromC(const PpOcrOptions& c, paddle_ocr::OcrOptions* out) {
   out->merge.line_max_height_diff_ratio = c.line_max_height_diff_ratio;
   out->merge.line_max_width_ratio = c.line_max_width_ratio;
   out->merge.region_pad_ratio = c.region_pad_ratio;
+  out->merge.region_pad_long_ratio = c.region_pad_long_ratio;
   out->merge.max_regions = c.max_regions;
   out->merge.sort_order = c.sort_order;
 
@@ -175,6 +185,7 @@ static void OptionsToC(const paddle_ocr::OcrOptions& o, PpOcrOptions* out) {
   out->line_max_height_diff_ratio = o.merge.line_max_height_diff_ratio;
   out->line_max_width_ratio = o.merge.line_max_width_ratio;
   out->region_pad_ratio = o.merge.region_pad_ratio;
+  out->region_pad_long_ratio = o.merge.region_pad_long_ratio;
   out->max_regions = o.merge.max_regions;
   out->sort_order = o.merge.sort_order;
 
@@ -415,6 +426,255 @@ PP_OCR_EXPORT PpOcrResultArray pp_ocr_recognize_bytes_ex(
 
   OCR_LOG("FFI pp_ocr_recognize_bytes_ex: got %zu results", results.size());
   return convertResults(engine, results);
+}
+
+// ---------------------------------------------------------------------------
+// 原子操作：宿主编排自定义识别管线
+// ---------------------------------------------------------------------------
+
+// 解码输入字节为 cv::Mat（共享实现）。
+static bool DecodeInput(PpOcrEngine* engine, const uint8_t* data, int length,
+                        cv::Mat* out) {
+  if (!engine) return false;
+  if (!data || length <= 0) {
+    engine->last_error = "Null or empty data";
+    return false;
+  }
+  *out = paddle_ocr::OcrEngine::DecodeImageBytes(
+      std::vector<uint8_t>(data, data + length));
+  if (out->empty()) {
+    engine->last_error = "cv::imdecode failed (corrupt or unsupported image)";
+    return false;
+  }
+  return true;
+}
+
+PP_OCR_EXPORT int32_t pp_ocr_transform_params_size(void) {
+  return static_cast<int32_t>(sizeof(PpOcrTransformParams));
+}
+
+PP_OCR_EXPORT void pp_ocr_transform_params_init(PpOcrTransformParams* out) {
+  if (!out) return;
+  std::memset(out, 0, sizeof(PpOcrTransformParams));
+  out->struct_size = static_cast<int32_t>(sizeof(PpOcrTransformParams));
+  paddle_ocr::PreprocessParams p;
+  paddle_ocr::FillDefaultPreprocess(&p);
+  out->scale_percent = p.scale_percent;
+  out->binarize_mode = static_cast<int32_t>(p.binarize_mode);
+  out->adaptive_block_size = p.adaptive_block_size;
+  out->adaptive_c = p.adaptive_c;
+  out->enhance_mode = static_cast<int32_t>(p.enhance_mode);
+  out->clahe_clip_limit = p.clahe_clip_limit;
+  out->clahe_grid_size = p.clahe_grid_size;
+  out->sharpen_amount = p.sharpen_amount;
+  out->morph_open_kernel = p.morph_open_kernel;
+  out->morph_close_kernel = p.morph_close_kernel;
+  out->color_mode = static_cast<int32_t>(p.color_mode);
+}
+
+PP_OCR_EXPORT int pp_ocr_preprocess_bytes(PpOcrEngine* engine,
+                                          const uint8_t* data, int length,
+                                          const PpOcrTransformParams* params,
+                                          PpOcrImageBuffer* out) {
+  if (!engine) return 0;
+  if (!out) {
+    engine->last_error = "Null out buffer";
+    return 0;
+  }
+  if (!params ||
+      params->struct_size !=
+          static_cast<int32_t>(sizeof(PpOcrTransformParams))) {
+    engine->last_error =
+        "PpOcrTransformParams.struct_size mismatch; fill it with "
+        "pp_ocr_transform_params_init()";
+    return 0;
+  }
+  cv::Mat image;
+  if (!DecodeInput(engine, data, length, &image)) return 0;
+  if (!engine->engine.IsInitialized()) {
+    engine->last_error = "Engine not initialized";
+    return 0;
+  }
+
+  // 平铺参数 → C++ 结构（合法性由 ApplyImageTransform 内部兜底）。
+  paddle_ocr::PreprocessParams p;
+  paddle_ocr::FillDefaultPreprocess(&p);
+  p.scale_percent = params->scale_percent;
+  p.binarize_mode = static_cast<paddle_ocr::BinarizeMode>(params->binarize_mode);
+  p.adaptive_block_size = params->adaptive_block_size;
+  p.adaptive_c = params->adaptive_c;
+  p.enhance_mode = static_cast<paddle_ocr::EnhanceMode>(params->enhance_mode);
+  p.clahe_clip_limit = params->clahe_clip_limit;
+  p.clahe_grid_size = params->clahe_grid_size;
+  p.sharpen_amount = params->sharpen_amount;
+  p.morph_open_kernel = params->morph_open_kernel;
+  p.morph_close_kernel = params->morph_close_kernel;
+  p.color_mode = static_cast<paddle_ocr::ColorMode>(params->color_mode);
+
+  cv::Mat transformed = engine->engine.ApplyImageTransform(image, p);
+  if (transformed.empty()) {
+    engine->last_error = "transform produced empty image";
+    return 0;
+  }
+  if (!cv::imencode(".png", transformed, engine->image_buffer)) {
+    engine->last_error = "cv::imencode failed";
+    return 0;
+  }
+  engine->image_out.data = engine->image_buffer.data();
+  engine->image_out.size =
+      static_cast<int32_t>(engine->image_buffer.size());
+  *out = engine->image_out;
+  engine->last_error.clear();
+  return 1;
+}
+
+PP_OCR_EXPORT int pp_ocr_detect_bytes(PpOcrEngine* engine,
+                                      const uint8_t* data, int length,
+                                      const PpOcrOptions* options,
+                                      PpOcrBoxArray* out) {
+  if (!engine) return 0;
+  if (!out) {
+    engine->last_error = "Null out buffer";
+    return 0;
+  }
+  cv::Mat image;
+  if (!DecodeInput(engine, data, length, &image)) return 0;
+  if (!engine->engine.IsInitialized()) {
+    engine->last_error = "Engine not initialized";
+    return 0;
+  }
+
+  paddle_ocr::OcrOptions parsed;
+  if (options) {
+    if (!ParseOptions(engine, options, &parsed)) return 0;
+  } else {
+    paddle_ocr::FillDefaultOptions(&parsed);
+  }
+
+  auto boxes = engine->engine.DetectOnImage(image, parsed.det);
+  engine->box_buffer.clear();
+  engine->box_buffer.reserve(boxes.size());
+  for (const auto& db : boxes) {
+    PpOcrBoxInput item{};
+    for (int j = 0; j < 4 && j < static_cast<int>(db.points.size()); ++j) {
+      item.box[j * 2] = static_cast<double>(db.points[j].x);
+      item.box[j * 2 + 1] = static_cast<double>(db.points[j].y);
+    }
+    item.branch_index = db.branch_index;
+    item.score = db.score;
+    engine->box_buffer.push_back(item);
+  }
+  engine->box_array.items = engine->box_buffer.data();
+  engine->box_array.count = static_cast<int32_t>(engine->box_buffer.size());
+  engine->box_array.image_width = image.cols;
+  engine->box_array.image_height = image.rows;
+  engine->box_array.error = nullptr;
+  *out = engine->box_array;
+  engine->last_error.clear();
+  return 1;
+}
+
+PP_OCR_EXPORT int pp_ocr_merge_boxes(PpOcrEngine* engine,
+                                     const PpOcrBoxInput* boxes, int count,
+                                     const PpOcrOptions* options,
+                                     int image_width, int image_height,
+                                     PpOcrBoxArray* out) {
+  if (!engine) return 0;
+  if (!out) {
+    engine->last_error = "Null out buffer";
+    return 0;
+  }
+  if (count > 0 && !boxes) {
+    engine->last_error = "Null boxes";
+    return 0;
+  }
+  if (!engine->engine.IsInitialized()) {
+    engine->last_error = "Engine not initialized";
+    return 0;
+  }
+
+  paddle_ocr::OcrOptions parsed;
+  if (options) {
+    if (!ParseOptions(engine, options, &parsed)) return 0;
+  } else {
+    paddle_ocr::FillDefaultOptions(&parsed);
+  }
+
+  std::vector<paddle_ocr::DetectedBox> detected;
+  detected.reserve(static_cast<size_t>(std::max(0, count)));
+  for (int i = 0; i < count; ++i) {
+    paddle_ocr::DetectedBox db;
+    for (int j = 0; j < 4; ++j) {
+      db.points.emplace_back(
+          static_cast<int>(std::lround(boxes[i].box[j * 2])),
+          static_cast<int>(std::lround(boxes[i].box[j * 2 + 1])));
+    }
+    db.branch_index = boxes[i].branch_index;
+    db.score = boxes[i].score;
+    detected.push_back(std::move(db));
+  }
+
+  auto regions =
+      engine->engine.MergeRegions(detected, parsed.merge, image_width,
+                                  image_height);
+  engine->box_buffer.clear();
+  engine->box_buffer.reserve(regions.size());
+  for (const auto& mb : regions) {
+    PpOcrBoxInput item{};
+    for (int j = 0; j < 4 && j < static_cast<int>(mb.points.size()); ++j) {
+      item.box[j * 2] = static_cast<double>(mb.points[j].x);
+      item.box[j * 2 + 1] = static_cast<double>(mb.points[j].y);
+    }
+    item.branch_index = 0;
+    item.score = mb.score;
+    engine->box_buffer.push_back(item);
+  }
+  engine->box_array.items = engine->box_buffer.data();
+  engine->box_array.count = static_cast<int32_t>(engine->box_buffer.size());
+  engine->box_array.image_width = image_width;
+  engine->box_array.image_height = image_height;
+  engine->box_array.error = nullptr;
+  *out = engine->box_array;
+  engine->last_error.clear();
+  return 1;
+}
+
+PP_OCR_EXPORT int pp_ocr_recognize_box_bytes(PpOcrEngine* engine,
+                                             const uint8_t* data, int length,
+                                             const double box[8],
+                                             const PpOcrOptions* options,
+                                             PpOcrTextResult* out) {
+  if (!engine) return 0;
+  if (!out || !box) {
+    engine->last_error = "Null out argument";
+    return 0;
+  }
+  cv::Mat image;
+  if (!DecodeInput(engine, data, length, &image)) return 0;
+  if (!engine->engine.IsInitialized()) {
+    engine->last_error = "Engine not initialized";
+    return 0;
+  }
+
+  paddle_ocr::OcrOptions parsed;
+  if (options) {
+    if (!ParseOptions(engine, options, &parsed)) return 0;
+  } else {
+    paddle_ocr::FillDefaultOptions(&parsed);
+  }
+
+  std::vector<cv::Point> points;
+  for (int j = 0; j < 4; ++j) {
+    points.emplace_back(static_cast<int>(std::lround(box[j * 2])),
+                        static_cast<int>(std::lround(box[j * 2 + 1])));
+  }
+  auto [text, conf] = engine->engine.RecognizeBox(image, points, parsed.rec);
+  engine->single_text_buffer = std::move(text);
+  engine->text_out.text = engine->single_text_buffer.c_str();
+  engine->text_out.confidence = static_cast<double>(conf);
+  *out = engine->text_out;
+  engine->last_error.clear();
+  return 1;
 }
 
 }  // extern "C"

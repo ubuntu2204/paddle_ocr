@@ -118,6 +118,10 @@ final class PpOcrOptionsC extends Struct {
   external double lineMaxWidthRatio;
   @Double()
   external double regionPadRatio;
+
+  /// 识别窗沿行方向外扩比例（相对字高）。
+  @Double()
+  external double regionPadLongRatio;
   @Int32()
   external int maxRegions;
   @Int32()
@@ -211,6 +215,117 @@ typedef _RecognizeBytesExDart =
       int,
       Pointer<PpOcrOptionsC>,
     );
+
+// ---------------------------------------------------------------------------
+// 原子操作（宿主编排自定义识别管线）的 C 签名
+// ---------------------------------------------------------------------------
+
+/// 预处理变换参数（对应 PpOcrTransformParams）。
+final class PpOcrTransformParamsC extends Struct {
+  @Int32()
+  external int structSize;
+
+  @Int32()
+  external int scalePercent;
+  @Int32()
+  external int binarizeMode;
+  @Int32()
+  external int adaptiveBlockSize;
+  @Double()
+  external double adaptiveC;
+  @Int32()
+  external int enhanceMode;
+  @Double()
+  external double claheClipLimit;
+  @Int32()
+  external int claheGridSize;
+  @Double()
+  external double sharpenAmount;
+  @Int32()
+  external int morphOpenKernel;
+  @Int32()
+  external int morphCloseKernel;
+  @Int32()
+  external int colorMode;
+}
+
+/// 引擎持有的 PNG 图像缓冲区。
+final class PpOcrImageBufferC extends Struct {
+  external Pointer<Uint8> data;
+
+  @Int32()
+  external int size;
+}
+
+/// 检测框（4 角点 + 来源）。
+final class PpOcrBoxInputC extends Struct {
+  @Array(8)
+  external Array<Double> box;
+
+  @Int32()
+  external int branchIndex;
+
+  @Double()
+  external double score;
+}
+
+/// 检测框数组（引擎持有）。
+final class PpOcrBoxArrayC extends Struct {
+  external Pointer<PpOcrBoxInputC> items;
+
+  @Int32()
+  external int count;
+
+  @Int32()
+  external int imageWidth;
+
+  @Int32()
+  external int imageHeight;
+
+  external Pointer<Utf8> error;
+}
+
+/// 单窗识别结果（引擎持有）。
+final class PpOcrTextResultC extends Struct {
+  external Pointer<Utf8> text;
+
+  @Double()
+  external double confidence;
+}
+
+typedef _TransformParamsSizeNative = Int32 Function();
+typedef _TransformParamsInitNative = Void Function(
+  Pointer<PpOcrTransformParamsC>,
+);
+typedef _PreprocessBytesNative =
+    Int32 Function(Pointer<Void>, Pointer<Uint8>, Int32,
+        Pointer<PpOcrTransformParamsC>, Pointer<PpOcrImageBufferC>);
+typedef _DetectBytesNative =
+    Int32 Function(Pointer<Void>, Pointer<Uint8>, Int32,
+        Pointer<PpOcrOptionsC>, Pointer<PpOcrBoxArrayC>);
+typedef _MergeBoxesNative =
+    Int32 Function(Pointer<Void>, Pointer<PpOcrBoxInputC>, Int32,
+        Pointer<PpOcrOptionsC>, Int32, Int32, Pointer<PpOcrBoxArrayC>);
+typedef _RecognizeBoxBytesNative =
+    Int32 Function(Pointer<Void>, Pointer<Uint8>, Int32, Pointer<Double>,
+        Pointer<PpOcrOptionsC>, Pointer<PpOcrTextResultC>);
+
+typedef _TransformParamsSizeDart = int Function();
+typedef _TransformParamsInitDart = void Function(
+  Pointer<PpOcrTransformParamsC>,
+);
+typedef _PreprocessBytesDart =
+    int Function(Pointer<Void>, Pointer<Uint8>, int,
+        Pointer<PpOcrTransformParamsC>, Pointer<PpOcrImageBufferC>);
+typedef _DetectBytesDart =
+    int Function(Pointer<Void>, Pointer<Uint8>, int,
+        Pointer<PpOcrOptionsC>, Pointer<PpOcrBoxArrayC>);
+typedef _MergeBoxesDart =
+    int Function(Pointer<Void>, Pointer<PpOcrBoxInputC>, int,
+        Pointer<PpOcrOptionsC>, int, int, Pointer<PpOcrBoxArrayC>);
+typedef _RecognizeBoxBytesDart =
+    int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Double>,
+        Pointer<PpOcrOptionsC>, Pointer<PpOcrTextResultC>);
 
 // ---------------------------------------------------------------------------
 // FFI 绑定
@@ -313,6 +428,128 @@ class PpOcrFfiBindings {
       .lookupFunction<_RecognizeBytesExNative, _RecognizeBytesExDart>(
         'pp_ocr_recognize_bytes_ex',
       );
+  late final _transformParamsSize = _dylib
+      .lookupFunction<_TransformParamsSizeNative, _TransformParamsSizeDart>(
+        'pp_ocr_transform_params_size',
+      );
+  late final _transformParamsInit = _dylib
+      .lookupFunction<_TransformParamsInitNative, _TransformParamsInitDart>(
+        'pp_ocr_transform_params_init',
+      );
+  late final _preprocessBytes = _dylib
+      .lookupFunction<_PreprocessBytesNative, _PreprocessBytesDart>(
+        'pp_ocr_preprocess_bytes',
+      );
+  late final _detectBytes = _dylib
+      .lookupFunction<_DetectBytesNative, _DetectBytesDart>(
+        'pp_ocr_detect_bytes',
+      );
+  late final _mergeBoxes = _dylib
+      .lookupFunction<_MergeBoxesNative, _MergeBoxesDart>('pp_ocr_merge_boxes');
+  late final _recognizeBoxBytes = _dylib
+      .lookupFunction<_RecognizeBoxBytesNative, _RecognizeBoxBytesDart>(
+        'pp_ocr_recognize_box_bytes',
+      );
+
+  // -------------------------------------------------------------------------
+  // 原子操作（宿主编排自定义识别管线）
+  // -------------------------------------------------------------------------
+
+  /// 原生侧 PpOcrTransformParams 的字节大小。
+  int transformParamsSize() => _transformParamsSize();
+
+  /// 把指针指向的结构体填成默认变换参数。
+  void transformParamsInit(Pointer<PpOcrTransformParamsC> out) =>
+      _transformParamsInit(out);
+
+  /// 原子 1：整图预处理变换，输出 PNG 字节（引擎持有）。
+  ({Pointer<Uint8> data, int size})? preprocessBytes(
+    Pointer<Void> engine,
+    Uint8List bytes,
+    Pointer<PpOcrTransformParamsC> params,
+  ) {
+    final ptr = calloc<Uint8>(bytes.length);
+    final out = calloc<PpOcrImageBufferC>();
+    try {
+      ptr.asTypedList(bytes.length).setAll(0, bytes);
+      if (_preprocessBytes(engine, ptr, bytes.length, params, out) == 0) {
+        return null;
+      }
+      return (data: out.ref.data, size: out.ref.size);
+    } finally {
+      calloc.free(ptr);
+      calloc.free(out);
+    }
+  }
+
+  /// 原子 2：文本检测。失败返回 null（用 getLastError 取原因）。
+  PpOcrBoxArrayC? detectBytes(
+    Pointer<Void> engine,
+    Uint8List bytes,
+    Pointer<PpOcrOptionsC> options,
+  ) {
+    final ptr = calloc<Uint8>(bytes.length);
+    final out = calloc<PpOcrBoxArrayC>();
+    try {
+      ptr.asTypedList(bytes.length).setAll(0, bytes);
+      if (_detectBytes(engine, ptr, bytes.length, options, out) == 0) {
+        return null;
+      }
+      return out.ref;
+    } finally {
+      calloc.free(ptr);
+      calloc.free(out);
+    }
+  }
+
+  /// 原子 3：合并多路检测框为识别窗。失败返回 null。
+  PpOcrBoxArrayC? mergeBoxes(
+    Pointer<Void> engine,
+    Pointer<PpOcrBoxInputC> boxes,
+    int count,
+    Pointer<PpOcrOptionsC> options,
+    int imageWidth,
+    int imageHeight,
+  ) {
+    final out = calloc<PpOcrBoxArrayC>();
+    try {
+      if (_mergeBoxes(engine, boxes, count, options, imageWidth, imageHeight,
+              out) ==
+          0) {
+        return null;
+      }
+      return out.ref;
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  /// 原子 4：识别一个文本窗。失败返回 null。
+  ({String text, double confidence})? recognizeBoxBytes(
+    Pointer<Void> engine,
+    Uint8List bytes,
+    List<double> box8,
+    Pointer<PpOcrOptionsC> options,
+  ) {
+    assert(box8.length == 8);
+    final ptr = calloc<Uint8>(bytes.length);
+    final boxPtr = calloc<Double>(8);
+    final out = calloc<PpOcrTextResultC>();
+    try {
+      ptr.asTypedList(bytes.length).setAll(0, bytes);
+      boxPtr.asTypedList(8).setAll(0, box8);
+      if (_recognizeBoxBytes(engine, ptr, bytes.length, boxPtr, options, out) ==
+          0) {
+        return null;
+      }
+      final text = out.ref.text == nullptr ? '' : out.ref.text.toDartString();
+      return (text: text, confidence: out.ref.confidence);
+    } finally {
+      calloc.free(ptr);
+      calloc.free(boxPtr);
+      calloc.free(out);
+    }
+  }
 
   /// 创建新的 OCR 引擎实例。
   Pointer<Void> create() => _create();

@@ -101,6 +101,97 @@ cv::Mat MakeKernel(int radius) {
 }  // namespace
 
 // ===========================================================================
+// 预处理插件接口实现
+//
+// 内置 Transform 类是对下方自由算子的薄封装（保持算子可独立调用）；
+// PreprocessPipeline 负责有序执行与坐标缩放统计。
+// ===========================================================================
+
+namespace {
+
+// shared_ptr 单例工厂：内置步骤无状态，全局共享一份即可。
+template <typename T>
+std::shared_ptr<IImageTransform> SharedStep() {
+  static const std::shared_ptr<IImageTransform> step = std::make_shared<T>();
+  return step;
+}
+
+}  // namespace
+
+cv::Mat ScaleTransform::Apply(const cv::Mat& src, const PreprocessParams& p) const {
+  return ApplyScale(src, p.scale_percent);
+}
+
+cv::Mat EnhanceTransform::Apply(const cv::Mat& src, const PreprocessParams& p) const {
+  return ApplyEnhance(src, p);
+}
+
+cv::Mat BinarizeTransform::Apply(const cv::Mat& src, const PreprocessParams& p) const {
+  return ApplyBinarize(src, p);
+}
+
+cv::Mat MorphologyTransform::Apply(const cv::Mat& src, const PreprocessParams& p) const {
+  return ApplyMorphology(src, p);
+}
+
+cv::Mat ColorTransform::Apply(const cv::Mat& src, const PreprocessParams& p) const {
+  return ApplyColorMode(src, p.color_mode);
+}
+
+PreprocessPipeline& PreprocessPipeline::AddStep(
+    std::shared_ptr<IImageTransform> step) {
+  if (step) steps_.push_back(std::move(step));
+  return *this;
+}
+
+void PreprocessPipeline::UseDefaults() {
+  Clear();
+  steps_ = {
+      SharedStep<ScaleTransform>(),     SharedStep<EnhanceTransform>(),
+      SharedStep<BinarizeTransform>(),  SharedStep<MorphologyTransform>(),
+      SharedStep<ColorTransform>(),
+  };
+}
+
+void PreprocessPipeline::Clear() { steps_.clear(); }
+
+std::vector<std::string> PreprocessPipeline::StepNames() const {
+  std::vector<std::string> names;
+  names.reserve(steps_.size());
+  for (const auto& s : steps_) names.push_back(s->name());
+  return names;
+}
+
+cv::Mat PreprocessPipeline::Run(const cv::Mat& src, const PreprocessParams& p,
+                                double* applied_scale) const {
+  if (applied_scale) *applied_scale = 1.0;
+  if (src.empty()) return src.clone();
+
+  // applied_scale 的语义沿袭历史 ApplyPreprocess：报告管线里的缩放系数。
+  // 只有当第一步是内置缩放步骤时才统计（自定义管线请自行换算坐标）。
+  const bool first_is_scale =
+      !steps_.empty() && std::string(steps_.front()->name()) == "scale";
+  if (applied_scale && first_is_scale) {
+    *applied_scale = (p.scale_percent > 0 ? p.scale_percent : 100) / 100.0;
+  }
+
+  cv::Mat out = src;
+  for (const auto& step : steps_) {
+    out = step->Apply(out, p);
+  }
+  return out;
+}
+
+const PreprocessPipeline& DefaultPreprocessPipeline() {
+  static const PreprocessPipeline pipeline = [] {
+    PreprocessPipeline p;
+    p.UseDefaults();
+    return p;
+  }();
+  return pipeline;
+}
+
+// ===========================================================================
 // 单步算子
 // ===========================================================================
 
@@ -252,14 +343,7 @@ cv::Mat ApplyColorMode(const cv::Mat& src, ColorMode mode) {
 
 cv::Mat ApplyPreprocess(const cv::Mat& src, const PreprocessParams& p,
                         double* applied_scale) {
-  double scale = 1.0;
-  cv::Mat out = ApplyScale(src, p.scale_percent, &scale);
-  out = ApplyEnhance(out, p);
-  out = ApplyBinarize(out, p);
-  out = ApplyMorphology(out, p);
-  out = ApplyColorMode(out, p.color_mode);
-  if (applied_scale) *applied_scale = scale;
-  return out;
+  return DefaultPreprocessPipeline().Run(src, p, applied_scale);
 }
 
 cv::Mat PrepareCropForRecognition(const cv::Mat& crop,
@@ -314,6 +398,40 @@ cv::RotatedRect ToRotatedRect(const std::vector<cv::Point>& box) {
     return cv::RotatedRect(cv::Point2f(r.tl()), cv::Size2f(1.f, 1.f), 0.f);
   }
   return cv::minAreaRect(PointsToMat(box));
+}
+
+// 两个框的「垂直咬合比例」：y 范围重叠 / 较短者。处于同一文本行的
+// 多路检出互相咬合很深（≥0.5），而贴边碎片（图像顶部的残框等）与
+// 字带几乎没有垂直交集。
+double BandOverlapRatio(const std::vector<cv::Point>& a,
+                        const std::vector<cv::Point>& b) {
+  const cv::Rect ra = BoxBoundingRect(a);
+  const cv::Rect rb = BoxBoundingRect(b);
+  const double overlap_y =
+      std::min(ra.y + ra.height, rb.y + rb.height) - std::max(ra.y, rb.y);
+  if (overlap_y <= 0) return 0.0;
+  return overlap_y / std::min(ra.height, rb.height);
+}
+
+// 中位数（副本排序，n=0 返回 fallback）。
+double MedianOf(std::vector<double> v, double fallback) {
+  if (v.empty()) return fallback;
+  std::sort(v.begin(), v.end());
+  const size_t n = v.size();
+  return n % 2 == 1 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) * 0.5;
+}
+
+// 成员框短边的中位数 = 「真实字高」。union 的短边会被贴边碎片撑大，
+// 用它反推预期字数会系统性低估；真实字高才是择优打分的可靠标尺。
+double MemberTextHeight(const std::vector<std::vector<cv::Point>>& members,
+                        double fallback) {
+  std::vector<double> shorts;
+  for (const auto& m : members) {
+    if (m.size() < 3) continue;
+    const cv::RotatedRect r = cv::minAreaRect(PointsToMat(m));
+    shorts.push_back(std::min(r.size.width, r.size.height));
+  }
+  return MedianOf(std::move(shorts), fallback);
 }
 }  // namespace
 
@@ -401,7 +519,21 @@ bool BoxesAreDuplicate(const std::vector<cv::Point>& a,
   // 都算重复。
   const double contain =
       std::max(BoxContainment(a, b), BoxContainment(b, a));
-  return contain >= m.merge_contain_threshold;
+  if (contain >= m.merge_contain_threshold) return true;
+
+  // 水平带判据：文本行是水平延伸目标，不同分支对同一行的垂直定位可能
+  // 差得很远（贴边碎片 y 从 0 开始），IoU 与包含度都够不着。
+  // 「垂直咬合 ≥ 50% 且水平重叠 > 70% 短宽」的两框只可能是同一行：
+  // 上下紧邻的两行字即便算上 0.3 倍字高的外扩，垂直咬合也 < 50%。
+  const cv::Rect ra = BoxBoundingRect(a);
+  const cv::Rect rb = BoxBoundingRect(b);
+  if (ra.width < 1 || rb.width < 1) return false;
+
+  const double overlap_x =
+      std::min(ra.x + ra.width, rb.x + rb.width) - std::max(ra.x, rb.x);
+  if (overlap_x <= 0) return false;
+  if (overlap_x / std::min(ra.width, rb.width) <= 0.7) return false;
+  return BandOverlapRatio(a, b) >= 0.5;
 }
 
 // ===========================================================================
@@ -485,13 +617,25 @@ std::vector<MergedBox> MergeDetectedBoxes(
   for (auto& c : clusters) {
     MergedBox mb;
     mb.points = c.Shape();
+    mb.member_boxes = c.members;
     mb.branches.assign(c.branches.begin(), c.branches.end());
     mb.score = c.score;
     mb.member_count = static_cast<int>(c.members.size());
     mb.stitched = false;
     mb.ref_long_side = BoxLongSide(mb.points);
     mb.ref_short_side = BoxShortSide(mb.points);
-    if (mb.points.size() >= 3) out.push_back(std::move(mb));
+    mb.text_height = MemberTextHeight(mb.member_boxes, mb.ref_short_side);
+    if (mb.points.size() >= 3) {
+      OCR_LOG("MergeDetectedBoxes: cluster rect=(%d,%d %dx%d) members=%d",
+              BoxBoundingRect(mb.points).x, BoxBoundingRect(mb.points).y,
+              BoxBoundingRect(mb.points).width,
+              BoxBoundingRect(mb.points).height, mb.member_count);
+      for (const auto& m : mb.member_boxes) {
+        const cv::Rect r = BoxBoundingRect(m);
+        OCR_LOG("  member: (%d,%d %dx%d)", r.x, r.y, r.width, r.height);
+      }
+      out.push_back(std::move(mb));
+    }
   }
 
   if (m.max_regions > 0 &&
@@ -632,12 +776,14 @@ std::vector<MergedBox> StitchSameLine(const std::vector<MergedBox>& boxes,
 
     MergedBox line;
     line.points = merged;
+    line.member_boxes = shapes;
     line.branches.assign(branches.begin(), branches.end());
     line.score = score;
     line.member_count = static_cast<int>(shapes.size());
     line.stitched = true;
     line.ref_long_side = BoxLongSide(line.points);
     line.ref_short_side = BoxShortSide(line.points);
+    line.text_height = MemberTextHeight(line.member_boxes, line.ref_short_side);
     out.push_back(std::move(line));
   }
 
@@ -671,6 +817,152 @@ void PadRegions(std::vector<MergedBox>* regions, double pad_ratio,
     }
     mb.points = std::move(pts);
   }
+}
+
+std::vector<cv::Point> PadBoxAlongLongSide(const std::vector<cv::Point>& box,
+                                           double pad_long_ratio,
+                                           int image_width, int image_height) {
+  if (box.size() < 3 || pad_long_ratio <= 0.0 || image_width <= 0 ||
+      image_height <= 0) {
+    return box;
+  }
+  cv::RotatedRect r = cv::minAreaRect(PointsToMat(box));
+  const double short_side = std::min(r.size.width, r.size.height);
+  // 行向 pad = pad_long_ratio × 字高；只在长边方向延伸。
+  const float pad = static_cast<float>(short_side * pad_long_ratio);
+  // minAreaRect 的 size 无方向语义，直接给长边加 2*pad，短边保持。
+  if (r.size.width >= r.size.height) {
+    r.size.width += 2.0f * pad;
+  } else {
+    r.size.height += 2.0f * pad;
+  }
+  cv::Point2f verts[4];
+  r.points(verts);
+  std::vector<cv::Point> pts;
+  pts.reserve(4);
+  for (const auto& v : verts) {
+    const int x = std::max(
+        0, std::min(image_width - 1, static_cast<int>(std::round(v.x))));
+    const int y = std::max(
+        0, std::min(image_height - 1, static_cast<int>(std::round(v.y))));
+    pts.emplace_back(x, y);
+  }
+  return pts;
+}
+
+void PadRegionsAlongLongSide(std::vector<MergedBox>* regions,
+                             double pad_long_ratio, int image_width,
+                             int image_height) {
+  if (!regions || pad_long_ratio <= 0.0 || image_width <= 0 ||
+      image_height <= 0) {
+    return;
+  }
+  for (auto& mb : *regions) {
+    if (mb.points.size() < 3) continue;
+    mb.points = PadBoxAlongLongSide(mb.points, pad_long_ratio, image_width,
+                                    image_height);
+  }
+}
+
+std::vector<cv::Point> PadBox(const std::vector<cv::Point>& box,
+                              double pad_ratio, int image_width,
+                              int image_height) {
+  if (box.size() < 3 || pad_ratio <= 0.0 || image_width <= 0 ||
+      image_height <= 0) {
+    return box;
+  }
+  cv::RotatedRect r = cv::minAreaRect(PointsToMat(box));
+  const double short_side = std::min(r.size.width, r.size.height);
+  const float pad = static_cast<float>(short_side * pad_ratio);
+  r.size.width = std::max(1.0f, r.size.width + 2.0f * pad);
+  r.size.height = std::max(1.0f, r.size.height + 2.0f * pad);
+  cv::Point2f verts[4];
+  r.points(verts);
+  std::vector<cv::Point> pts;
+  pts.reserve(4);
+  for (const auto& v : verts) {
+    const int x = std::max(
+        0, std::min(image_width - 1, static_cast<int>(std::round(v.x))));
+    const int y = std::max(
+        0, std::min(image_height - 1, static_cast<int>(std::round(v.y))));
+    pts.emplace_back(x, y);
+  }
+  return pts;
+}
+
+std::vector<cv::Point> BuildRecognitionWindow(
+    const MergedBox& region, double pad_ratio, double pad_long_ratio,
+    int image_width, int image_height, double anchor_min_region_ratio) {
+  if (region.points.size() < 3) return region.points;
+
+  // -----------------------------------------------------------------------
+  // 识别窗 = 「成员统计的水平化重建」。
+  //
+  // union 会被贴边碎片撑歪：残框把高度撑大一倍后，CRNN 输入里字带只占
+  // 一半，笔画细节在缩放到 48px 时丢失、开始读错字（实测「舍→合」、
+  // 「篮→籃」）。单选某个成员框也不可靠——贴边残框可能与字带完全咬合、
+  // 长边甚至更长。
+  //
+  // 稳健做法是从成员框群体里**统计**出字带：
+  //   字高 h   = 成员短边的中位数（残框是少数，中位数免疫）；
+  //   行带中心 = 成员 y 中心的中位数；
+  //   行带 x   = 成员与区域 bounding 的 x 并集（保证整行都在）；
+  // 窗口 = [x0 − 行向pad, x1 + 行向pad] × [cy − h/2 − 纵向pad, cy + ...]
+  // 行向 pad 把「检测框紧邻但检测不到」的字（孤立单横「一」等）交给
+  // CRNN —— 识别器窗口里多一段背景不影响读出紧邻的字（实测 pad ≥ 1.0
+  // 倍字高即可找回行首「一」）。
+  // -----------------------------------------------------------------------
+  std::vector<const std::vector<cv::Point>*> members;
+  for (const auto& m : region.member_boxes) {
+    if (m.size() >= 3) members.push_back(&m);
+  }
+
+  if (members.size() >= 2) {
+    std::vector<double> shorts;
+    std::vector<double> cys;
+    double x0 = std::numeric_limits<double>::max();
+    double x1 = std::numeric_limits<double>::lowest();
+    for (const auto* m : members) {
+      const cv::RotatedRect r = cv::minAreaRect(PointsToMat(*m));
+      shorts.push_back(std::min(r.size.width, r.size.height));
+      cys.push_back(r.center.y);
+      const cv::Rect b = BoxBoundingRect(*m);
+      x0 = std::min(x0, static_cast<double>(b.x));
+      x1 = std::max(x1, static_cast<double>(b.x + b.width));
+    }
+    // 区域 bounding 的 x 范围一并纳入（含行向外扩与拼接成果）。
+    const cv::Rect ub = BoxBoundingRect(region.points);
+    x0 = std::min(x0, static_cast<double>(ub.x));
+    x1 = std::max(x1, static_cast<double>(ub.x + ub.width));
+
+    const double h = MedianOf(std::move(shorts), BoxShortSide(region.points));
+    const double cy = MedianOf(std::move(cys), BoxCenter(region.points).y);
+    const double pad_v = h * pad_ratio;
+    const double pad_l = h * pad_long_ratio;
+
+    auto clamp_x = [&](double v) {
+      return std::max(0, std::min(image_width - 1,
+                                  static_cast<int>(std::lround(v))));
+    };
+    auto clamp_y = [&](double v) {
+      return std::max(0, std::min(image_height - 1,
+                                  static_cast<int>(std::lround(v))));
+    };
+    const int wx0 = clamp_x(x0 - pad_l);
+    const int wx1 = clamp_x(x1 + pad_l);
+    const int wy0 = clamp_y(cy - h / 2.0 - pad_v);
+    const int wy1 = clamp_y(cy + h / 2.0 + pad_v);
+    if (wx1 - wx0 >= 8 && wy1 - wy0 >= 8) {
+      return {cv::Point(wx0, wy0), cv::Point(wx1, wy0), cv::Point(wx1, wy1),
+              cv::Point(wx0, wy1)};
+    }
+  }
+
+  // 成员不足（单框区域等）：退回 union + 双向外扩。
+  std::vector<cv::Point> window =
+      PadBox(region.points, pad_ratio, image_width, image_height);
+  return PadBoxAlongLongSide(window, pad_long_ratio, image_width,
+                             image_height);
 }
 
 void SortBoxesForReadingOrder(std::vector<MergedBox>* boxes, int sort_order) {

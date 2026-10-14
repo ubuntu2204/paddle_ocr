@@ -18,24 +18,6 @@ class OcrResult {
     required this.confidence,
   });
 
-  /// 从原生 MethodChannel 返回的 map 解析构造 [OcrResult]。
-  factory OcrResult.fromMap(Map<dynamic, dynamic> map) {
-    final rawBox = map['box'] as List<dynamic>;
-    final box = rawBox.map<Offset>((point) {
-      final p = point as List<dynamic>;
-      return Offset(
-        (p[0] as num).toDouble(),
-        (p[1] as num).toDouble(),
-      );
-    }).toList();
-
-    return OcrResult(
-      box: box,
-      text: map['text'] as String? ?? '',
-      confidence: (map['confidence'] as num?)?.toDouble() ?? 0.0,
-    );
-  }
-
   @override
   String toString() =>
       'OcrResult(text: "$text", confidence: ${confidence.toStringAsFixed(3)}, '
