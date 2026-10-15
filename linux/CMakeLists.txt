@@ -134,6 +134,7 @@ list(APPEND PLUGIN_SOURCES
   "${PLUGIN_SHARED_DIR}/ocr_options.h"
   "${PLUGIN_SHARED_DIR}/ocr_preprocess.cpp"
   "${PLUGIN_SHARED_DIR}/ocr_preprocess.h"
+  "${PLUGIN_SHARED_DIR}/ocr_thread_pool.h"
   "${PLUGIN_SHARED_DIR}/opencv_abi_utils.h"
   "${PLUGIN_SHARED_DIR}/pp_ocr_ffi.cpp"
   "${PLUGIN_SHARED_DIR}/pp_ocr_ffi.h"
@@ -163,11 +164,15 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
+# 管线并行化用 std::thread（cpp/ocr_thread_pool.h）
+find_package(Threads REQUIRED)
+
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   flutter
   PkgConfig::GTK
   ${ONNXRUNTIME_LINK_TARGET}
   ${OpenCV_LIBS}
+  Threads::Threads
 )
 
 # 向下游（example/runner）传递 linker 搜索路径：因为 libpp_ocr_plugin.so 的
@@ -262,7 +267,8 @@ if(_pp_ocr_tests_enabled AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/paddle_ocr
     PkgConfig::GTK
     ${ONNXRUNTIME_LINK_TARGET}
     ${OpenCV_LIBS}
-    gtest_main gmock)
+    gtest_main gmock
+    Threads::Threads)
 
   include(GoogleTest)
   gtest_discover_tests(${TEST_RUNNER})

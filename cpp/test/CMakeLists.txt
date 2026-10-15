@@ -113,5 +113,9 @@ target_link_libraries(pp_ocr_cpp_tests PRIVATE
 
 target_compile_features(pp_ocr_cpp_tests PRIVATE cxx_std_17)
 
+# 管线并行化用 std::thread（cpp/ocr_thread_pool.h）
+find_package(Threads REQUIRED)
+target_link_libraries(pp_ocr_cpp_tests PRIVATE Threads::Threads)
+
 include(GoogleTest)
 gtest_discover_tests(pp_ocr_cpp_tests)

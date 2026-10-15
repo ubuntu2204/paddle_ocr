@@ -26,10 +26,10 @@ ENGINE_SRCS=(
   "$REPO/cpp/ocr_preprocess.cpp"
   "$REPO/cpp/ocr_options.cpp"
 )
-CXXFLAGS=(-std=c++17 -O1 -DPADDLE_OCR_DEBUG=0)
+CXXFLAGS=(-std=c++17 -O1 -DPADDLE_OCR_DEBUG=0 -pthread)
 # 本机 /usr/local/lib 下的 sqlite3 缺符号，会让 OpenCV 依赖的 libgdal 链接失败。
 # 这是环境问题而非插件问题，用下面两个开关绕开。
-LDFLAGS=(-Wl,--unresolved-symbols=ignore-in-shared-libs)
+LDFLAGS=(-Wl,--unresolved-symbols=ignore-in-shared-libs -pthread)
 INC=(-I"$REPO/cpp" -I"$ORT/include" $(pkg-config --cflags opencv4))
 LIBS=(-lopencv_imgproc -lopencv_imgcodecs -lopencv_core
       -L"$ORT/lib" -l:libonnxruntime.so -lpthread -ldl)

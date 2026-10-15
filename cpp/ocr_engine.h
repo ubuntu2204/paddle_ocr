@@ -194,6 +194,10 @@ class OcrEngine {
     std::vector<DetectedBox> boxes;    // 框坐标已换算回原图坐标系
     double scale = 1.0;                // image 相对原图的缩放系数
     uint32_t flag = 0;                 // 对应的 BranchFlag
+    // 本分支在 BuildBranchConfigs 结果里的下标。MergedBox::branches 里
+    // 记的就是它（来自 DetectedBox::branch_index）；当某路预处理产出空
+    // 图被跳过时，branches 向量的位置与配置下标会错位，必须用本字段比对。
+    int config_index = 0;
     std::string name;
     bool rec_source = true;            // 能否作为识别源图（二值化类分支不行）
   };

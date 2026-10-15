@@ -129,6 +129,7 @@ list(APPEND PLUGIN_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/ocr_options.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/ocr_preprocess.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/ocr_preprocess.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/ocr_thread_pool.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/opencv_abi_utils.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/pp_ocr_ffi.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../cpp/pp_ocr_ffi.h"
@@ -165,12 +166,16 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
+# 管线并行化用 std::thread（cpp/ocr_thread_pool.h）
+find_package(Threads REQUIRED)
+
 target_link_libraries(${PLUGIN_NAME} PRIVATE
   flutter
   flutter_wrapper_plugin
   "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib"
   ${OpenCV_LIBS}
   comdlg32
+  Threads::Threads
 )
 
 # ==============================================================================

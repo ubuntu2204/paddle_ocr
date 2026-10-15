@@ -1,5 +1,6 @@
 #include "ocr_engine.h"
 #include "debug_utils.h"
+#include "ocr_thread_pool.h"
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -26,6 +27,11 @@
 #endif
 
 namespace paddle_ocr {
+
+// 并行度上限：分支检测是整图推理（重），区域识别是小裁剪推理（轻，且
+// 共享识别会话的线程池）。留上限避免线程创建开销吃掉收益。
+constexpr size_t kMaxBranchThreads = 8;
+constexpr size_t kMaxRegionThreads = 12;
 
 // SCREENSHOT_CMAKE_PATCHED: copy std::vector<cv::Point> into a cv::Mat
 // (1, N, CV_32SC2) so it can be passed to OpenCV via InputArray without
@@ -183,7 +189,8 @@ DetectParams TextDetector::DefaultParams() {
 // 初始化检测模型
 bool TextDetector::Initialize(const std::string& model_path) {
   Ort::SessionOptions session_options;
-  session_options.SetIntraOpNumThreads(4);  // 使用4线程进行推理
+  // 推理线程数按 CPU 核数取（留一半给并行阶段），见 SessionThreadCount。
+  session_options.SetIntraOpNumThreads(SessionThreadCount());
   session_options.SetGraphOptimizationLevel(
       GraphOptimizationLevel::ORT_ENABLE_ALL);
 
@@ -670,7 +677,7 @@ TextRecognizer::~TextRecognizer() = default;
 bool TextRecognizer::Initialize(const std::string& model_path,
                                 const std::string& dict_path) {
   Ort::SessionOptions session_options;
-  session_options.SetIntraOpNumThreads(4);
+  session_options.SetIntraOpNumThreads(SessionThreadCount());
   session_options.SetGraphOptimizationLevel(
       GraphOptimizationLevel::ORT_ENABLE_ALL);
 
@@ -821,17 +828,18 @@ std::vector<std::pair<std::string, float>> TextRecognizer::Recognize(
     const cv::Mat& image,
     const std::vector<std::vector<cv::Point>>& boxes,
     const RecognizeParams& params) {
-  std::vector<std::pair<std::string, float>> results;
+  std::vector<std::pair<std::string, float>> results(boxes.size());
   if (!session_ || dict_.empty()) return results;
 
-  results.reserve(boxes.size());
-  for (size_t bi = 0; bi < boxes.size(); ++bi) {
+  // 各框识别彼此独立（Session::Run 可重入），并行执行；
+  // 结果按下标回填，顺序与串行完全一致。
+  ParallelFor(boxes.size(), [&](size_t bi) {
     if (boxes[bi].size() < 3) {
-      results.push_back({"", 0.0f});
-      continue;
+      results[bi] = {"", 0.0f};
+      return;
     }
-    results.push_back(RecognizeRegion(image, boxes[bi], params));
-  }
+    results[bi] = RecognizeRegion(image, boxes[bi], params);
+  }, kMaxRegionThreads);
   return results;
 }
 
@@ -1421,17 +1429,20 @@ std::vector<cv::Point> OcrEngine::ScaleBoxToBranch(
 std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
                                                  const OcrOptions& options) {
   const std::vector<BranchConfig> configs = BuildBranchConfigs(options);
-  std::vector<BranchOutput> branches;
-  branches.reserve(configs.size());
 
-  std::vector<DetectedBox> all_boxes;
-  for (size_t bi = 0; bi < configs.size(); ++bi) {
+  // 步骤 1：每路「预处理 + 检测」彼此独立，并行执行。
+  // 结果先按配置下标写进槽位，收敛阶段再按固定顺序拼接 ——
+  // branch_index 与 all_boxes 顺序和串行版完全一致。
+  std::vector<BranchOutput> slots(configs.size());
+  std::vector<char> slot_ok(configs.size(), 0);
+  ParallelFor(configs.size(), [&](size_t bi) {
     const BranchConfig& cfg = configs[bi];
 
     BranchOutput out;
     out.flag = cfg.flag;
     out.name = cfg.name;
     out.rec_source = cfg.rec_source;
+    out.config_index = static_cast<int>(bi);
 
     double scale = 1.0;
     out.image = ApplyPreprocess(image, cfg.prep, &scale);
@@ -1439,7 +1450,7 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
     if (out.image.empty()) {
       OCR_LOG("RunPipeline: branch[%zu '%s'] preprocess produced empty image",
               bi, cfg.name.c_str());
-      continue;
+      return;
     }
 
     out.boxes = detector_.DetectScored(out.image, cfg.det, static_cast<int>(bi));
@@ -1456,8 +1467,19 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
 
     OCR_LOG("RunPipeline: branch[%zu '%s'] scale=%.2f detected %zu boxes", bi,
             cfg.name.c_str(), scale, out.boxes.size());
-    all_boxes.insert(all_boxes.end(), out.boxes.begin(), out.boxes.end());
-    branches.push_back(std::move(out));
+    slots[bi] = std::move(out);
+    slot_ok[bi] = 1;
+  }, kMaxBranchThreads);
+
+  // 收敛：保持配置顺序（决定 branch_index 与 all_boxes 顺序）
+  std::vector<BranchOutput> branches;
+  branches.reserve(configs.size());
+  std::vector<DetectedBox> all_boxes;
+  for (size_t bi = 0; bi < configs.size(); ++bi) {
+    if (!slot_ok[bi]) continue;
+    all_boxes.insert(all_boxes.end(), slots[bi].boxes.begin(),
+                     slots[bi].boxes.end());
+    branches.push_back(std::move(slots[bi]));
   }
 
   if (all_boxes.empty()) {
@@ -1469,9 +1491,7 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
   std::vector<MergedBox> regions =
       MergeAndBuildWindows(all_boxes, options.merge, image.cols, image.rows);
 
-  // 步骤4：择优识别
-  std::vector<OcrBoxResult> results;
-  results.reserve(regions.size());
+  // 步骤4：择优识别（并行执行，见下方 ParallelFor）
 
   // 文本条增强三态对应的尝试列表：0 = 原样，1 = 增强。
   std::vector<int> enhance_passes;
@@ -1485,9 +1505,14 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
       break;
   }
 
-  for (size_t ri = 0; ri < regions.size(); ++ri) {
+  // 步骤4：择优识别。各区域彼此独立（Region 内部顺序尝试各变体），
+  // 并行执行；结果按区域下标回填，收敛后顺序与串行完全一致。
+  std::vector<OcrBoxResult> results(regions.size());
+  std::vector<char> keep(regions.size(), 0);
+
+  ParallelFor(regions.size(), [&](size_t ri) {
     const MergedBox& region = regions[ri];
-    if (region.points.size() < 3) continue;
+    if (region.points.size() < 3) return;
 
     // region.points 已经是识别窗（成员基底 + 双向外扩，见
     // MergeAndBuildWindows），直接用于裁剪识别。
@@ -1514,13 +1539,14 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
     };
     std::vector<Variant> variants;
     variants.push_back({&image, 1.0, "raw"});
-    for (size_t bi = 0; bi < branches.size(); ++bi) {
-      const BranchOutput& b = branches[bi];
+    for (const BranchOutput& b : branches) {
       // 二值化/白字提取类分支只负责「把框找全」，它们的像素不能喂识别器。
       if (!b.rec_source) continue;
+      // region.branches 里存的是「配置下标」（DetectedBox::branch_index），
+      // 与 branches 向量的位置可能因跳过空预处理分支而错位，用配置下标比。
       const bool contributed =
           std::find(region.branches.begin(), region.branches.end(),
-                    static_cast<int>(bi)) != region.branches.end();
+                    b.config_index) != region.branches.end();
       if (!options.rec.try_all_branches && !contributed) continue;
       // raw 分支不缩放时与原图完全等价，不必重复跑。
       if (b.flag == kBranchRaw && std::abs(b.scale - 1.0) < 1e-9) continue;
@@ -1567,7 +1593,7 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
       }
     }
 
-    if (best_text.empty()) continue;
+    if (best_text.empty()) return;
 
     if (options.verbose_stats) {
       OCR_LOG("RunPipeline: region[%zu] variants=%zu members=%d stitched=%d "
@@ -1580,12 +1606,21 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
     r.box = region.points;
     r.text = std::move(best_text);
     r.confidence = best_conf;
-    results.push_back(std::move(r));
+    results[ri] = std::move(r);
+    keep[ri] = 1;
+  }, kMaxRegionThreads);
+
+  // 收敛：保持区域顺序
+  std::vector<OcrBoxResult> out;
+  out.reserve(results.size());
+  for (size_t ri = 0; ri < results.size(); ++ri) {
+    if (!keep[ri]) continue;
+    out.push_back(std::move(results[ri]));
   }
 
   OCR_LOG("RunPipeline: %zu branches, %zu boxes -> %zu regions -> %zu texts",
-          branches.size(), all_boxes.size(), regions.size(), results.size());
-  return results;
+          branches.size(), all_boxes.size(), regions.size(), out.size());
+  return out;
 }
 
 cv::Mat OcrEngine::DecodeImageBytes(const std::vector<uint8_t>& image_bytes) {
