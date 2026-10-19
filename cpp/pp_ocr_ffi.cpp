@@ -1,5 +1,6 @@
 #include "pp_ocr_ffi.h"
 #include "ocr_engine.h"
+#include "ocr_thread_pool.h"
 #include "debug_utils.h"
 
 #include <cmath>
@@ -12,7 +13,7 @@
 // ---------------------------------------------------------------------------
 // 与根 pubspec.yaml 的 version 保持同步；example 界面会显示该字符串，
 // 用于核对 Dart 包与原生库的版本是否配套。
-static const char* kVersion = "pp_ocr 0.5.1";
+static const char* kVersion = "pp_ocr 0.5.2";
 
 // ---------------------------------------------------------------------------
 // 引擎包装器：持有 C++ OcrEngine 实例及可复用的结果缓冲区
@@ -29,10 +30,47 @@ struct PpOcrEngine {
   std::vector<uint8_t> image_buffer;        // preprocess 输出（PNG 字节）
   std::vector<PpOcrBoxInput> box_buffer;    // detect/merge 输出
   std::string single_text_buffer;           // recognize_box 输出
+  std::vector<std::string> batch_text_buffers;  // recognize_boxes 输出
+  std::vector<PpOcrTextResult> batch_items;     // recognize_boxes 输出
   PpOcrBoxArray box_array{};                // 返回给调用方的框数组
   PpOcrImageBuffer image_out{};             // 返回给调用方的图像缓冲
   PpOcrTextResult text_out{};               // 返回给调用方的文本结果
+  PpOcrTextResultArray batch_array{};       // 返回给调用方的批量结果
+
+  // 解码缓存：宿主编排管线（如 Dart 侧 runOcrPipeline）会拿同一张变体图
+  // 反复识别多个区域，每次调用都对整张 PNG 重新 cv::imdecode —— 3x 变体图
+  // 光解码就要上百毫秒，而识别本身才几十毫秒。按内容哈希缓存最近几份
+  // 解码结果（FIFO 淘汰，容量大于典型变体数即可全覆盖）。
+  // 约定：返回的 Mat 只读（cv::Mat 是引用计数句柄，拷贝廉价且安全）。
+  struct DecodeCacheEntry {
+    uint64_t key = 0;
+    cv::Mat image;
+  };
+  std::vector<DecodeCacheEntry> decode_cache;
 };
+
+// 解码缓存容量：监控预设的变体数（raw + clahe + 2x + 3x + denoise 等）
+// 约 5~8 张，取 8 保证一轮区域循环内全部命中。
+constexpr size_t kDecodeCacheCapacity = 8;
+
+// 输入字节的内容哈希（FNV-1a 64 位，含长度；按 8 字节块混入加速）。
+static uint64_t InputContentHash(const uint8_t* data, int length) {
+  uint64_t h = 1469598103934665603ULL;
+  h ^= static_cast<uint64_t>(static_cast<uint32_t>(length));
+  h *= 1099511628211ULL;
+  int i = 0;
+  for (; i + 8 <= length; i += 8) {
+    uint64_t chunk;
+    std::memcpy(&chunk, data + i, sizeof(chunk));
+    h ^= chunk;
+    h *= 1099511628211ULL;
+  }
+  for (; i < length; ++i) {
+    h ^= data[i];
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
 
 // ---------------------------------------------------------------------------
 // 辅助函数：将 OcrBoxResult 向量转换为 C 风格的结果数组
@@ -432,7 +470,8 @@ PP_OCR_EXPORT PpOcrResultArray pp_ocr_recognize_bytes_ex(
 // 原子操作：宿主编排自定义识别管线
 // ---------------------------------------------------------------------------
 
-// 解码输入字节为 cv::Mat（共享实现）。
+// 解码输入字节为 cv::Mat（带内容哈希缓存）。
+// 同一份字节重复传入时直接返回缓存的 Mat，省掉整图 imdecode。
 static bool DecodeInput(PpOcrEngine* engine, const uint8_t* data, int length,
                         cv::Mat* out) {
   if (!engine) return false;
@@ -440,12 +479,25 @@ static bool DecodeInput(PpOcrEngine* engine, const uint8_t* data, int length,
     engine->last_error = "Null or empty data";
     return false;
   }
+  const uint64_t key = InputContentHash(data, length);
+  for (const auto& entry : engine->decode_cache) {
+    if (entry.key == key) {
+      *out = entry.image;
+      engine->last_error.clear();
+      return true;
+    }
+  }
   *out = paddle_ocr::OcrEngine::DecodeImageBytes(
       std::vector<uint8_t>(data, data + length));
   if (out->empty()) {
     engine->last_error = "cv::imdecode failed (corrupt or unsupported image)";
     return false;
   }
+  engine->decode_cache.push_back({key, *out});
+  while (engine->decode_cache.size() > kDecodeCacheCapacity) {
+    engine->decode_cache.erase(engine->decode_cache.begin());
+  }
+  engine->last_error.clear();
   return true;
 }
 
@@ -516,7 +568,12 @@ PP_OCR_EXPORT int pp_ocr_preprocess_bytes(PpOcrEngine* engine,
     engine->last_error = "transform produced empty image";
     return 0;
   }
-  if (!cv::imencode(".png", transformed, engine->image_buffer)) {
+  // PNG 压缩级别取 1（最快）：这些字节的宿主要么是「传回给本引擎的其它
+  // 原子接口」（解码缓存已按内容哈希命中，与压缩率无关），要么是「宿主
+  // 自己留着看图」—— 两者都不在乎文件大小，而在乎延迟。默认级别（3）在
+  // 3x 变体图（3000×1500 量级）上编码要几百毫秒，级别 1 快一倍以上。
+  const std::vector<int> encode_params = {cv::IMWRITE_PNG_COMPRESSION, 1};
+  if (!cv::imencode(".png", transformed, engine->image_buffer, encode_params)) {
     engine->last_error = "cv::imencode failed";
     return 0;
   }
@@ -673,6 +730,82 @@ PP_OCR_EXPORT int pp_ocr_recognize_box_bytes(PpOcrEngine* engine,
   engine->text_out.text = engine->single_text_buffer.c_str();
   engine->text_out.confidence = static_cast<double>(conf);
   *out = engine->text_out;
+  engine->last_error.clear();
+  return 1;
+}
+
+PP_OCR_EXPORT int pp_ocr_recognize_boxes_bytes(
+    PpOcrEngine* engine, const uint8_t* data, int length, const double* boxes,
+    int32_t box_count, const PpOcrOptions* options,
+    PpOcrTextResultArray* out) {
+  if (!engine) return 0;
+  if (!out || !boxes) {
+    engine->last_error = "Null out argument";
+    return 0;
+  }
+  if (box_count < 0) {
+    engine->last_error = "Negative box_count";
+    return 0;
+  }
+  if (box_count == 0) {
+    engine->batch_items.clear();
+    engine->batch_text_buffers.clear();
+    engine->batch_array.items = nullptr;
+    engine->batch_array.count = 0;
+    engine->batch_array.error = nullptr;
+    *out = engine->batch_array;
+    engine->last_error.clear();
+    return 1;
+  }
+  cv::Mat image;
+  if (!DecodeInput(engine, data, length, &image)) return 0;
+  if (!engine->engine.IsInitialized()) {
+    engine->last_error = "Engine not initialized";
+    return 0;
+  }
+
+  paddle_ocr::OcrOptions parsed;
+  if (options) {
+    if (!ParseOptions(engine, options, &parsed)) return 0;
+  } else {
+    paddle_ocr::FillDefaultOptions(&parsed);
+  }
+
+  // 并行识别各窗：RecognizeBox 内部只读会话（ORT Session::Run 可重入），
+  // 各下标写各自槽位，与串行结果逐位一致。相比宿主逐个窗调
+  // pp_ocr_recognize_box_bytes，省掉 N 次 FFI 穿越与大图字节拷贝，
+  // 并把小裁剪推理铺到线程池上（识别阶段墙钟降一个量级的前提）。
+  const size_t count = static_cast<size_t>(box_count);
+  std::vector<std::pair<std::string, float>> texts(count);
+  paddle_ocr::ParallelFor(count, [&](size_t bi) {
+    std::vector<cv::Point> points;
+    points.reserve(4);
+    for (int j = 0; j < 4; ++j) {
+      points.emplace_back(
+          static_cast<int>(std::lround(boxes[bi * 8 + j * 2])),
+          static_cast<int>(std::lround(boxes[bi * 8 + j * 2 + 1])));
+    }
+    texts[bi] = engine->engine.RecognizeBox(image, points, parsed.rec);
+  }, paddle_ocr::kMaxRegionThreads);
+
+  // 先稳定字符串存储，再建指针表（与 convertResults 同一套防悬空手法）。
+  engine->batch_text_buffers.clear();
+  engine->batch_text_buffers.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    engine->batch_text_buffers.push_back(texts[i].first);
+  }
+  engine->batch_items.clear();
+  engine->batch_items.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    PpOcrTextResult item;
+    item.text = engine->batch_text_buffers[i].c_str();
+    item.confidence = static_cast<double>(texts[i].second);
+    engine->batch_items.push_back(item);
+  }
+  engine->batch_array.items = engine->batch_items.data();
+  engine->batch_array.count = static_cast<int32_t>(count);
+  engine->batch_array.error = nullptr;
+  *out = engine->batch_array;
   engine->last_error.clear();
   return 1;
 }

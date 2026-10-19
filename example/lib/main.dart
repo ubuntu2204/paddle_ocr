@@ -8,7 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:pp_ocr/pp_ocr.dart';
 
 /// 应用版本号（与根 pubspec.yaml 的 version 保持同步）。
-const String kAppVersion = '0.5.1';
+const String kAppVersion = '0.5.2';
 
 /// 应用程序入口函数
 void main() {

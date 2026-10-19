@@ -5,6 +5,7 @@
 #   tool/diag_build.sh diag    [模型目录] [图片路径]   # 各预设横向对比
 #   tool/diag_build.sh probe   [模型目录] [图片路径]   # 单分支 × 增强矩阵（ROI 探针）
 #   tool/diag_build.sh probe2  [模型目录] [图片路径]   # 条带 × 变换矩阵（找回「一舍」实验）
+#   tool/diag_build.sh bench   [模型目录] [图片...]    # 速度基准 + 结果签名比对
 #   tool/diag_build.sh buildonly                      # 只编译
 #
 # 依赖：libopencv-dev、仓库内 linux/third_party/onnxruntime/（见
@@ -25,6 +26,7 @@ ENGINE_SRCS=(
   "$REPO/cpp/ocr_engine.cpp"
   "$REPO/cpp/ocr_preprocess.cpp"
   "$REPO/cpp/ocr_options.cpp"
+  "$REPO/cpp/pp_ocr_ffi.cpp"
 )
 CXXFLAGS=(-std=c++17 -O1 -DPADDLE_OCR_DEBUG=0 -pthread)
 # 本机 /usr/local/lib 下的 sqlite3 缺符号，会让 OpenCV 依赖的 libgdal 链接失败。
@@ -45,7 +47,7 @@ what="${1:-both}"
 shift || true
 
 case "$what" in
-  diag|probe|probe2|probe3|probe4|probe5)
+  diag|probe|probe2|probe3|probe4|probe5|bench|bench_ffi)
     build_one "$what"
     ;;
   buildonly)
@@ -55,6 +57,8 @@ case "$what" in
     build_one probe3
     build_one probe4
     build_one probe5
+    build_one bench
+    build_one bench_ffi
     exit 0
     ;;
   both)
@@ -64,6 +68,8 @@ case "$what" in
     build_one probe3
     build_one probe4
     build_one probe5
+    build_one bench
+    build_one bench_ffi
     exit 0
     ;;
   *)
@@ -75,6 +81,6 @@ esac
 export LD_PRELOAD="${LD_PRELOAD:-/usr/lib/x86_64-linux-gnu/libsqlite3.so.0}"
 export LD_LIBRARY_PATH="$ORT/lib:${LD_LIBRARY_PATH:-}"
 
-if [ "$what" = "diag" ] || [ "$what" = "probe" ] || [ "$what" = "probe2" ] || [ "$what" = "probe3" ] || [ "$what" = "probe4" ] || [ "$what" = "probe5" ]; then
+if [ "$what" = "diag" ] || [ "$what" = "probe" ] || [ "$what" = "probe2" ] || [ "$what" = "probe3" ] || [ "$what" = "probe4" ] || [ "$what" = "probe5" ] || [ "$what" = "bench" ] || [ "$what" = "bench_ffi" ]; then
   "$OUT/$what" "${1:-$REPO/model}" "${@:2}"
 fi

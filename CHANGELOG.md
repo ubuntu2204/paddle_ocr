@@ -183,3 +183,46 @@
   预设编号沿用发布时取值不重排（surveillance=3、maxRecall=5），原生
   `MakePresetOptions()` 对未知编号回退标准默认值。不传选项的引擎默认行为
   （单分支旧行为）不受影响。
+
+## 0.5.2（识别速度优化，结果不变）
+
+* **检测输入张量融合构建**：原实现是 `convertTo + split + 3 次通道算术 +
+  merge + split + 3 次 memcpy` 约 10 趟全图扫描；改为一次遍历直接写 NCHW
+  float 缓冲（`FillNchwTensor`），逐位复现原数值顺序与运算次序，模型输出
+  不变。检测输入动辄 3000×1500，预处理阶段墙钟降一个量级。
+* **相同输入只推理一次**：多分支管线里 raw 与 sensitive 的预处理产物逐字节
+  相同（只有后处理阈值不同），原先跑两次整图推理。现在按张量内容分组
+  （memcmp 判等），整组只跑一次模型，组内各分支用自己的 `DetectParams`
+  做后处理。`TextDetector` 相应暴露 `BuildDetectInput` /
+  `RunDetectInference` / `PostProcess` 分步接口。
+* **检测阶段拆成「预处理 → 推理」两个 Phase**：OpenCV 与 ORT 各有线程池，
+  混在同一个并行 lane 里互相抢核；分开后各自吃满。同时修正分支并行度
+  （`kMaxBranchThreads` 8→2）——实测 DB 推理是内存带宽瓶颈，并发 Run 只
+  会拖慢（24 核机器上 8 路 2089ms vs 2 路 1868ms）。
+* **识别变体提前收尾（可证明安全）**：由打分公式
+  `score = geometry + (raw_crop ? 2.0 : 0) + 0.001*scale` 与
+  `EstimateTextWidthInEm` 的每字符 ≥0.35 字高权重，可推出 geometry 的
+  理论上界；当前最优分一旦达到某类候选（增强/未增强）的上界，该类其余
+  候选数学上不可能翻盘，直接跳过。典型监控帧的增强通道推理量减半。
+  `expected_em ≤ 0.5` 的退化区域与 mode 1/2（长度无界）不启用早退。
+* **FFI 解码缓存**：`pp_ocr_recognize_box_bytes` / `detect_bytes` 原先每次
+  调用都对整张变体图重新 `cv::imdecode`（3x 变体图解码 ~78ms，而识别本身
+  才几十毫秒）。改为按输入内容哈希缓存最近 8 份解码结果，Dart 管线
+  「窗 × 变体」的重复解码全部命中。实测识别阶段 1475ms → 436ms。
+* **FFI 预处理 PNG 压缩级别 3→1**：这些字节只被本引擎其它原子接口消费
+  （解码缓存按内容哈希命中，与压缩率无关），3x 变体图编码 248ms → 167ms，
+  体积几乎不变（5.4MB → 5.7MB）。
+* **新增批量识别原子 API `pp_ocr_recognize_boxes_bytes`**：一次 FFI 穿越
+  在同一张图上识别多个文本窗，原生侧线程池并行（`RecognizeBox` 的会话
+  `Run` 可重入），图像只解码一次。Dart 侧 `runOcrPipeline` 改为按变体
+  批量识别 + 逐窗择优，打分公式与顺序不变。实测 35 次识别 463ms → 311ms。
+* **新增诊断工具**：`tool/diag/bench.cpp`（C++ 内部管线基准，输出结果签名
+  供优化前后对照）、`tool/diag/bench_ffi.cpp`（复刻 Dart 编排的 FFI 链路
+  基准，`PP_OCR_BENCH_BATCH=1` 走批量 API）、`cpp/paddle_ocr_timing.h`
+  （分阶段墙钟计时，`PP_OCR_TIMING=1` 启用，默认零开销）。另修复检测输出
+  统计循环（纯诊断用的全图 min/max/mean 扫描）只在调试构建里执行。
+* 实测（24 核，3 张监控帧，best-of-3，结果签名逐位一致）：**总耗时
+  8360ms → 6350ms（-24%）**。
+* 遗留说明：`upscale3x` 分支的检测输入必须保持 3×base。实测降到 2×base
+  （文字在检测输入里仍有 ~53px）会丢行首细笔画「一」的召回
+  （「一舍篮球场…」退化成「合篮球场…」）。

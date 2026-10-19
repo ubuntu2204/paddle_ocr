@@ -183,7 +183,43 @@ List<OcrResult> runOcrPipeline({
       );
       if (merged == null || merged.count == 0) return const [];
 
-      // ---- 4. 择优识别 ----
+      // ---- 4a. 按变体批量识别 ----
+      // 一次 FFI 调用识别全部窗（原生侧线程池并行），而不是「窗 × 变体」
+      // 各调一次。结果按 [变体下标][窗下标] 收集；打分逐窗独立，改批量
+      // 不改变任何选择结果。
+      final perVariant =
+          List<List<({String text, double confidence})>>.generate(
+        variants.length,
+        (_) => List.filled(merged.count, (text: '', confidence: 0.0)),
+      );
+      for (int vi = 0; vi < variants.length; vi++) {
+        final v = variants[vi];
+        if (!v.recSource) continue;
+        final boxesPtr = calloc<Double>(merged.count * 8);
+        try {
+          for (int r = 0; r < merged.count; r++) {
+            final window = merged.items[r];
+            for (int j = 0; j < 8; j++) {
+              boxesPtr[r * 8 + j] = window.box[j] * v.scale;
+            }
+          }
+          final batch = bindings.recognizeBoxesBytes(
+            engine,
+            v.bytes,
+            boxesPtr,
+            merged.count,
+            optsPtr,
+          );
+          if (batch == null) continue;
+          for (int r = 0; r < batch.length && r < merged.count; r++) {
+            perVariant[vi][r] = batch[r];
+          }
+        } finally {
+          calloc.free(boxesPtr);
+        }
+      }
+
+      // ---- 4b. 逐窗择优 ----
       final results = <OcrResult>[];
       for (int r = 0; r < merged.count; r++) {
         final window = merged.items[r];
@@ -208,18 +244,11 @@ List<OcrResult> runOcrPipeline({
         String bestText = '';
         var bestConf = 0.0;
         var bestScore = double.negativeInfinity;
-        for (final v in variants) {
+        for (int vi = 0; vi < variants.length; vi++) {
+          final v = variants[vi];
           if (!v.recSource) continue;
-          final scaled = [
-            for (int j = 0; j < 8; j++) box8[j] * v.scale,
-          ];
-          final out = bindings.recognizeBoxBytes(
-            engine,
-            v.bytes,
-            scaled,
-            optsPtr,
-          );
-          if (out == null || out.text.isEmpty) continue;
+          final out = perVariant[vi][r];
+          if (out.text.isEmpty) continue;
           final score = scoreVariant(
             out.text,
             out.confidence,

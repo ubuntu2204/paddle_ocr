@@ -313,6 +313,29 @@ typedef struct {
   double confidence;
 } PpOcrTextResult;
 
+/// 多窗识别结果数组（引擎持有，下一次调用前有效）。
+/// items[i] 与入参 boxes[i] 一一对应；识别失败的项 text 为指向空串的
+/// 指针（不会是 nullptr，方便宿主无判断直读）。
+typedef struct {
+  PpOcrTextResult* items;
+  int32_t count;
+  const char* error;  ///< 成功时为 nullptr
+} PpOcrTextResultArray;
+
+/// 批量识别：在**同一张图**上识别多个文本窗（一次调用，原生侧并行）。
+///
+/// 相比反复调用 pp_ocr_recognize_box_bytes：
+///   * 一次 FFI 穿越代替 N 次（大图的字节拷贝开销归零）；
+///   * 原生侧用线程池并行跑各窗推理（会话的 intra-op 池共享，不超订）；
+///   * 图像只解码一次（内容哈希缓存命中）。
+/// boxes 为 box_count × 8 个 double（[x0,y0, x1,y1, x2,y2, x3,y3]），
+/// 坐标在输入图坐标系。options 的 rec.* 部分生效。
+/// 失败返回 0（可用 pp_ocr_get_last_error 取原因）。
+PP_OCR_EXPORT int pp_ocr_recognize_boxes_bytes(
+    PpOcrEngine* engine, const uint8_t* data, int length,
+    const double* boxes, int32_t box_count, const PpOcrOptions* options,
+    PpOcrTextResultArray* out);
+
 /// 原子 1：对图像字节跑一次内置预处理变换，输出 PNG 编码字节。
 /// 成功返回 1；失败返回 0（可用 pp_ocr_get_last_error 取原因）。
 PP_OCR_EXPORT int pp_ocr_preprocess_bytes(PpOcrEngine* engine,

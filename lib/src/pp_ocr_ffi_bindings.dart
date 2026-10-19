@@ -293,6 +293,16 @@ final class PpOcrTextResultC extends Struct {
   external double confidence;
 }
 
+/// 多窗识别结果数组（引擎持有，下一次调用前有效）。
+final class PpOcrTextResultArrayC extends Struct {
+  external Pointer<PpOcrTextResultC> items;
+
+  @Int32()
+  external int count;
+
+  external Pointer<Utf8> error;
+}
+
 typedef _TransformParamsSizeNative = Int32 Function();
 typedef _TransformParamsInitNative = Void Function(
   Pointer<PpOcrTransformParamsC>,
@@ -309,6 +319,9 @@ typedef _MergeBoxesNative =
 typedef _RecognizeBoxBytesNative =
     Int32 Function(Pointer<Void>, Pointer<Uint8>, Int32, Pointer<Double>,
         Pointer<PpOcrOptionsC>, Pointer<PpOcrTextResultC>);
+typedef _RecognizeBoxesBytesNative =
+    Int32 Function(Pointer<Void>, Pointer<Uint8>, Int32, Pointer<Double>, Int32,
+        Pointer<PpOcrOptionsC>, Pointer<PpOcrTextResultArrayC>);
 
 typedef _TransformParamsSizeDart = int Function();
 typedef _TransformParamsInitDart = void Function(
@@ -326,6 +339,9 @@ typedef _MergeBoxesDart =
 typedef _RecognizeBoxBytesDart =
     int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Double>,
         Pointer<PpOcrOptionsC>, Pointer<PpOcrTextResultC>);
+typedef _RecognizeBoxesBytesDart =
+    int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Double>, int,
+        Pointer<PpOcrOptionsC>, Pointer<PpOcrTextResultArrayC>);
 
 // ---------------------------------------------------------------------------
 // FFI 绑定
@@ -450,6 +466,10 @@ class PpOcrFfiBindings {
       .lookupFunction<_RecognizeBoxBytesNative, _RecognizeBoxBytesDart>(
         'pp_ocr_recognize_box_bytes',
       );
+  late final _recognizeBoxesBytes = _dylib
+      .lookupFunction<_RecognizeBoxesBytesNative, _RecognizeBoxesBytesDart>(
+        'pp_ocr_recognize_boxes_bytes',
+      );
 
   // -------------------------------------------------------------------------
   // 原子操作（宿主编排自定义识别管线）
@@ -547,6 +567,50 @@ class PpOcrFfiBindings {
     } finally {
       calloc.free(ptr);
       calloc.free(boxPtr);
+      calloc.free(out);
+    }
+  }
+
+  /// 原子 4（批量）：在**同一张图**上识别多个文本窗。
+  ///
+  /// [boxes] 为 count × 8 个 double（[x0,y0, x1,y1, x2,y2, x3,y3]），坐标在
+  /// 输入图坐标系。返回与入参一一对应的结果列表（识别失败的项为空串）；
+  /// 失败返回 null。相比逐个窗调用 [recognizeBoxBytes]：一次 FFI 穿越、
+  /// 图像只解码一次、原生侧线程池并行推理。
+  List<({String text, double confidence})>? recognizeBoxesBytes(
+    Pointer<Void> engine,
+    Uint8List bytes,
+    Pointer<Double> boxes,
+    int count,
+    Pointer<PpOcrOptionsC> options,
+  ) {
+    final ptr = calloc<Uint8>(bytes.length);
+    final out = calloc<PpOcrTextResultArrayC>();
+    try {
+      ptr.asTypedList(bytes.length).setAll(0, bytes);
+      if (_recognizeBoxesBytes(
+            engine,
+            ptr,
+            bytes.length,
+            boxes,
+            count,
+            options,
+            out,
+          ) ==
+          0) {
+        return null;
+      }
+      final items = out.ref.items;
+      if (items == nullptr) return const [];
+      return [
+        for (int i = 0; i < out.ref.count; i++)
+          (
+            text: items[i].text == nullptr ? '' : items[i].text.toDartString(),
+            confidence: items[i].confidence,
+          ),
+      ];
+    } finally {
+      calloc.free(ptr);
       calloc.free(out);
     }
   }

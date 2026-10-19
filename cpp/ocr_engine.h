@@ -34,6 +34,30 @@ class TextDetector {
   std::vector<DetectedBox> DetectScored(
       const cv::Mat& image, const DetectParams& params, int branch_index);
 
+  // =========================================================================
+  // 分步接口（供 OcrEngine 做「同输入多参数」分组推理用）
+  //
+  // 多分支管线里，不同分支可能对**同一张预处理图**只用不同的后处理阈值
+  // （典型：raw 与 sensitive 的预处理产物逐字节相同，只有 thresh 等
+  // 不同）。此时整组只需跑一次模型推理，组内每个分支各用自己的
+  // DetectParams 做后处理即可，省掉重复的整图推理。
+  // =========================================================================
+
+  // 构建模型输入张量（NCHW float32，1×3×H×W，已归一化）。ratio_h/ratio_w
+  // 回填「原图 → 输入」的缩放比，供后处理把框坐标换算回原图。
+  // 返回 false 表示输入不可用（空图 / 尺寸非法）。
+  bool BuildDetectInput(const cv::Mat& image, const DetectParams& params,
+                        std::vector<float>& input_data, int& out_h, int& out_w,
+                        float& ratio_h, float& ratio_w);
+  // 对已构建好的输入张量跑一次推理，输出原始概率图（out_h × out_w）。
+  bool RunDetectInference(const float* input_data, int in_h, int in_w,
+                          std::vector<float>& out_data, int& out_h, int& out_w);
+  // 后处理：概率图 → 文本框（用调用方给的阈值参数）。
+  std::vector<DetectedBox> PostProcess(
+      const float* output, int out_h, int out_w,
+      float ratio_h, float ratio_w, const DetectParams& params,
+      int branch_index);
+
  private:
   Ort::Env env_;                 // ONNX Runtime 运行环境
   Ort::Session session_{nullptr};  // ONNX Runtime 推理会话
@@ -46,11 +70,6 @@ class TextDetector {
   // 图像预处理：缩放、归一化，返回处理后的 Mat 及缩放比例
   cv::Mat Preprocess(const cv::Mat& image, const DetectParams& params,
                      float& ratio_h, float& ratio_w);
-  // 后处理：将模型输出转换为文本框列表
-  std::vector<DetectedBox> PostProcess(
-      const float* output, int out_h, int out_w,
-      float ratio_h, float ratio_w, const DetectParams& params,
-      int branch_index);
   // 从预测图（概率图）和二值化掩码中提取文本框
   std::vector<DetectedBox> BoxesFromBitmap(
       const cv::Mat& pred, const cv::Mat& mask,
@@ -192,6 +211,13 @@ class OcrEngine {
   struct BranchOutput {
     cv::Mat image;                     // 预处理后的图（识别时从这里裁剪）
     std::vector<DetectedBox> boxes;    // 框坐标已换算回原图坐标系
+    // 检测模型输入张量（NCHW float32）。分组推理用：内容相同的分支只跑
+    // 一次模型，推理完成后即可释放（识别阶段只用 image）。
+    std::vector<float> input;
+    int input_h = 0;
+    int input_w = 0;
+    float ratio_h = 1.0f;              // 分支图 → 检测输入的缩放比
+    float ratio_w = 1.0f;
     double scale = 1.0;                // image 相对原图的缩放系数
     uint32_t flag = 0;                 // 对应的 BranchFlag
     // 本分支在 BuildBranchConfigs 结果里的下标。MergedBox::branches 里

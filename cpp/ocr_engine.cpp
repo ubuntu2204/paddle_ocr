@@ -1,6 +1,7 @@
 #include "ocr_engine.h"
 #include "debug_utils.h"
 #include "ocr_thread_pool.h"
+#include "paddle_ocr_timing.h"
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -28,11 +29,6 @@
 
 namespace paddle_ocr {
 
-// 并行度上限：分支检测是整图推理（重），区域识别是小裁剪推理（轻，且
-// 共享识别会话的线程池）。留上限避免线程创建开销吃掉收益。
-constexpr size_t kMaxBranchThreads = 8;
-constexpr size_t kMaxRegionThreads = 12;
-
 // SCREENSHOT_CMAKE_PATCHED: copy std::vector<cv::Point> into a cv::Mat
 // (1, N, CV_32SC2) so it can be passed to OpenCV via InputArray without
 // crossing the DLL boundary with a Debug-layout vector. cv::Mat's layout
@@ -43,6 +39,65 @@ static cv::Mat _PatchedPointsToMat(const std::vector<cv::Point>& pts) {
     std::memcpy(m.data, pts.data(), pts.size() * sizeof(cv::Point));
   }
   return m;
+}
+
+// ============================================================================
+// 融合的张量构建（性能关键路径）
+//
+// 原实现是「convertTo + split + 3 次通道算术 + merge + split + 3 次
+// memcpy」≈ 10 趟全图扫描；检测输入动辄 3000×1500×3，光搬运就要几百毫秒。
+// 这里一次遍历直接把 8UC3 BGR 像素写进 NCHW float 缓冲区，逐位复现原
+// 数值顺序（同样的 float 中间量与运算次序），因此模型输出不变。
+//
+// det 归一化：(v/255 - mean)/std，均值方差按 ImageNet（B/G/R 顺序见下）；
+// rec 归一化：(v/255 - 0.5)/0.5。
+// 通道序：输出通道 0=B、1=G、2=R（与旧实现 split/merge 的结果一致）。
+// ============================================================================
+static void FillNchwTensor(const cv::Mat& bgr, float* out, int h, int w,
+                           bool rec_style) {
+  const size_t plane = static_cast<size_t>(h) * w;
+  // ImageNet 均值/标准差，通道序 B,G,R。
+  // 注意：B 通道的 std 历史上写的是 0.225（ImageNet 标准值是 0.229）——
+  // 这是既有行为，监控字幕预设的识别质量是按这组数值调出来的，**刻意
+  // 保留原样**；要改的话必须单独做 A/B 实验，不能混在性能重构里。
+  const float mean[3] = {0.406f, 0.456f, 0.485f};
+  const float std_[3] = {0.225f, 0.224f, 0.229f};
+  cv::parallel_for_(cv::Range(0, h), [&](const cv::Range& r) {
+    for (int y = r.start; y < r.end; ++y) {
+      const cv::Vec3b* row = bgr.ptr<cv::Vec3b>(y);
+      float* p0 = out + static_cast<size_t>(y) * w;  // B
+      float* p1 = p0 + plane;                        // G
+      float* p2 = p1 + plane;                        // R
+      for (int x = 0; x < w; ++x) {
+        const cv::Vec3b& px = row[x];
+        // 与 convertTo(CV_32FC3, 1/255) 相同的取整路径：double 乘法后
+        // 窄化到 float，再按 float 做减除。
+        const float vb =
+            static_cast<float>(static_cast<double>(px[0]) * (1.0 / 255.0));
+        const float vg =
+            static_cast<float>(static_cast<double>(px[1]) * (1.0 / 255.0));
+        const float vr =
+            static_cast<float>(static_cast<double>(px[2]) * (1.0 / 255.0));
+        if (rec_style) {
+          p0[x] = (vb - 0.5f) / 0.5f;
+          p1[x] = (vg - 0.5f) / 0.5f;
+          p2[x] = (vr - 0.5f) / 0.5f;
+        } else {
+          p0[x] = (vb - mean[0]) / std_[0];
+          p1[x] = (vg - mean[1]) / std_[1];
+          p2[x] = (vr - mean[2]) / std_[2];
+        }
+      }
+    }
+  });
+}
+
+// 两组 float 张量内容是否逐字节相同（分组推理前的确认）。
+static bool TensorsBitwiseEqual(const std::vector<float>& a,
+                                const std::vector<float>& b) {
+  if (a.size() != b.size()) return false;
+  if (a.empty()) return true;
+  return std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
 }
 
 // ============================================================================
@@ -225,86 +280,49 @@ std::vector<DetectedBox> TextDetector::DetectScored(
   std::vector<DetectedBox> no_boxes;
   if (!session_ || image.empty()) return no_boxes;
 
+  PaddleOcrTimer t_total("det.total");
+  std::vector<float> input_data;
+  int input_h = 0, input_w = 0;
   float ratio_h = 1.0f, ratio_w = 1.0f;
-  cv::Mat input_tensor_mat = Preprocess(image, params, ratio_h, ratio_w);
-  if (input_tensor_mat.empty()) return no_boxes;
+  {
+    PaddleOcrTimer t("det.preprocess");
+    if (!BuildDetectInput(image, params, input_data, input_h, input_w, ratio_h,
+                          ratio_w)) {
+      return no_boxes;
+    }
+  }
 
-  int input_h = input_tensor_mat.rows;
-  int input_w = input_tensor_mat.cols;
   OCR_LOG("Detect[b%d]: input image %dx%d -> resized %dx%d",
           branch_index, image.cols, image.rows, input_w, input_h);
   OCR_LOG("Detect[b%d]: ratio_h=%.4f ratio_w=%.4f thresh=%.3f box_thresh=%.3f",
           branch_index, ratio_h, ratio_w, static_cast<float>(params.thresh),
           static_cast<float>(params.box_thresh));
 
-  // 将 HWC 格式的 Mat 转换为 NCHW 格式的浮点向量
-  std::vector<float> input_data(1 * 3 * input_h * input_w);
-  cv::Mat bgr_channels[3]; // SCREENSHOT_CMAKE_PATCHED: avoid STL ABI mismatch
-  cv::split(input_tensor_mat, bgr_channels);
-  for (int c = 0; c < 3; ++c) {
-    std::memcpy(input_data.data() + c * input_h * input_w,
-                bgr_channels[c].data,
-                input_h * input_w * sizeof(float));
-  }
-
-  // 创建输入张量
-  std::array<int64_t, 4> input_shape = {1, 3, input_h, input_w};
-  auto memory_info = Ort::MemoryInfo::CreateCpu(
-      OrtArenaAllocator, OrtMemTypeDefault);
-  Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
-      memory_info, input_data.data(), input_data.size(),
-      input_shape.data(), input_shape.size());
-
-  const char* in_names[] = {input_name_.c_str()};
-  const char* out_names[] = {output_name_.c_str()};
-
-  // 执行推理
-  try {
-    auto output_tensors = session_.Run(
-        Ort::RunOptions{nullptr}, in_names, &input_tensor, 1,
-        out_names, 1);
-
-    // 获取输出数据
-    float* output_data = output_tensors[0].GetTensorMutableData<float>();
-    auto output_shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
-
-    int out_h = static_cast<int>(output_shape[2]);
-    int out_w = static_cast<int>(output_shape[3]);
-
-    // 分析输出统计信息
-    int total = out_h * out_w;
-    float min_val = output_data[0], max_val = output_data[0];
-    double sum = 0.0;
-    int above_thresh = 0;
-    for (int i = 0; i < total; ++i) {
-      float v = output_data[i];
-      if (v < min_val) min_val = v;
-      if (v > max_val) max_val = v;
-      sum += v;
-      if (v >= params.thresh) above_thresh++;
+  std::vector<float> out_data;
+  int out_h = 0, out_w = 0;
+  {
+    PaddleOcrTimer t_infer("det.infer");
+    if (!RunDetectInference(input_data.data(), input_h, input_w, out_data, out_h,
+                            out_w)) {
+      return no_boxes;
     }
-    double mean_val = sum / total;
-    OCR_LOG("Detect[b%d]: output stats: min=%.4f max=%.4f mean=%.4f",
-            branch_index, min_val, max_val, mean_val);
-    OCR_LOG("Detect[b%d]: pixels above thresh(%.3f): %d / %d (%.1f%%)",
-            branch_index, static_cast<float>(params.thresh), above_thresh, total,
-            100.0 * above_thresh / total);
-
-    return PostProcess(output_data, out_h, out_w, ratio_h, ratio_w, params,
-                       branch_index);
-  } catch (const Ort::Exception& e) {
-    OCR_LOG("Detect[b%d]: ORT exception: %s", branch_index, e.what());
-    return no_boxes;
-  } catch (const std::exception& e) {
-    OCR_LOG("Detect[b%d]: exception: %s", branch_index, e.what());
-    return no_boxes;
   }
+
+  PaddleOcrTimer t_post("det.postprocess");
+  auto boxes = PostProcess(out_data.data(), out_h, out_w, ratio_h, ratio_w,
+                           params, branch_index);
+  t_post.Stop();
+  return boxes;
 }
 
-// 预处理：缩放、填充、归一化
-cv::Mat TextDetector::Preprocess(const cv::Mat& image,
-                                 const DetectParams& params, float& ratio_h,
-                                 float& ratio_w) {
+// 构建检测模型输入：缩放 + 32 对齐填充 + 归一化，直接写 NCHW float 缓冲。
+// 一次遍历完成旧实现里 convertTo/split/merge 的约 10 趟全图扫描。
+bool TextDetector::BuildDetectInput(const cv::Mat& image,
+                                    const DetectParams& params,
+                                    std::vector<float>& input_data, int& out_h,
+                                    int& out_w, float& ratio_h,
+                                    float& ratio_w) {
+  if (image.empty()) return false;
   int h = image.rows;
   int w = image.cols;
   float ratio = 1.0f;
@@ -336,30 +354,82 @@ cv::Mat TextDetector::Preprocess(const cv::Mat& image,
   cv::Mat resized;
   cv::resize(image, resized, cv::Size(resize_w, resize_h));
 
-  // 如需则用零填充
+  // 如需则用零填充（resize 输出已经等于目标尺寸时不会触发）
   if (resized.rows < resize_h || resized.cols < resize_w) {
     cv::Mat padded = cv::Mat::zeros(resize_h, resize_w, resized.type());
     resized.copyTo(padded(cv::Rect(0, 0, resized.cols, resized.rows)));
     resized = padded;
   }
 
-  // 归一化：使用 ImageNet 均值/标准差，BGR->RGB
-  cv::Mat float_img;
-  resized.convertTo(float_img, CV_32FC3, 1.0 / 255.0);
+  // 只支持 8UC3 的融合快路径；其它类型（极少见）走通用 split/merge。
+  input_data.assign(static_cast<size_t>(3) * resize_h * resize_w, 0.0f);
+  if (resized.type() == CV_8UC3 && resized.isContinuous()) {
+    FillNchwTensor(resized, input_data.data(), resize_h, resize_w,
+                   /*rec_style=*/false);
+  } else {
+    cv::Mat float_img;
+    resized.convertTo(float_img, CV_32FC3, 1.0 / 255.0);
+    cv::Mat channels[3]; // SCREENSHOT_CMAKE_PATCHED: avoid STL ABI mismatch
+    cv::split(float_img, channels);
+    float mean_vals[] = {0.485f, 0.456f, 0.406f};  // R, G, B
+    float std_vals[] = {0.229f, 0.224f, 0.225f};
+    channels[2] = (channels[2] - mean_vals[0]) / std_vals[0];  // R
+    channels[1] = (channels[1] - mean_vals[1]) / std_vals[1];  // G
+    channels[0] = (channels[0] - mean_vals[2]) / std_vals[2];  // B
+    for (int c = 0; c < 3; ++c) {
+      std::memcpy(input_data.data() + static_cast<size_t>(c) * resize_h * resize_w,
+                  channels[c].data,
+                  static_cast<size_t>(resize_h) * resize_w * sizeof(float));
+    }
+  }
+  out_h = resize_h;
+  out_w = resize_w;
+  return true;
+}
 
-  cv::Mat channels[3]; // SCREENSHOT_CMAKE_PATCHED: avoid STL ABI mismatch
-  cv::split(float_img, channels);
-  // BGR -> RGB 并归一化
-  float mean_vals[] = {0.485f, 0.456f, 0.406f};  // R, G, B
-  float std_vals[] = {0.229f, 0.224f, 0.225f};
-  // channels: 0=B, 1=G, 2=R
-  channels[2] = (channels[2] - mean_vals[0]) / std_vals[0];  // R
-  channels[1] = (channels[1] - mean_vals[1]) / std_vals[1];  // G
-  channels[0] = (channels[0] - mean_vals[2]) / std_vals[2];  // B
+// 跑一次检测推理，输出原始概率图（out_h × out_w，行优先）。
+bool TextDetector::RunDetectInference(const float* input_data, int in_h,
+                                      int in_w, std::vector<float>& out_data,
+                                      int& out_h, int& out_w) {
+  if (!session_ || input_data == nullptr || in_h <= 0 || in_w <= 0) return false;
+  std::array<int64_t, 4> input_shape = {1, 3, in_h, in_w};
+  auto memory_info = Ort::MemoryInfo::CreateCpu(
+      OrtArenaAllocator, OrtMemTypeDefault);
+  Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+      memory_info, const_cast<float*>(input_data),
+      static_cast<size_t>(3) * in_h * in_w, input_shape.data(),
+      input_shape.size());
 
-  cv::Mat normalized;
-  cv::merge(channels, 3, normalized); // SCREENSHOT_CMAKE_PATCHED: use pointer overload
-  return normalized;
+  const char* in_names[] = {input_name_.c_str()};
+  const char* out_names[] = {output_name_.c_str()};
+
+  try {
+    PaddleOcrTimer t_infer("det.infer");
+    auto output_tensors = session_.Run(
+        Ort::RunOptions{nullptr}, in_names, &input_tensor, 1,
+        out_names, 1);
+    t_infer.Stop();
+
+    // 获取输出数据
+    const float* output_data = output_tensors[0].GetTensorMutableData<float>();
+    auto output_shape = output_tensors[0].GetTensorTypeAndShapeInfo().GetShape();
+    if (output_shape.size() < 4) {
+      OCR_LOG("RunDetectInference: unexpected output dim=%zu",
+              output_shape.size());
+      return false;
+    }
+    out_h = static_cast<int>(output_shape[2]);
+    out_w = static_cast<int>(output_shape[3]);
+    out_data.assign(output_data,
+                    output_data + static_cast<size_t>(out_h) * out_w);
+    return true;
+  } catch (const Ort::Exception& e) {
+    OCR_LOG("RunDetectInference: ORT exception: %s", e.what());
+    return false;
+  } catch (const std::exception& e) {
+    OCR_LOG("RunDetectInference: exception: %s", e.what());
+    return false;
+  }
 }
 
 // 后处理：二值化 + 轮廓检测
@@ -849,19 +919,33 @@ std::pair<std::string, float> TextRecognizer::RecognizeRegion(
     const RecognizeParams& params) {
   if (!session_ || dict_.empty()) return {"", 0.0f};
 
-  cv::Mat crop = PreprocessCrop(image, box, params);
+  PaddleOcrTimer t_total("rec.total");
+  cv::Mat crop;
+  {
+    PaddleOcrTimer t_crop("rec.crop");
+    crop = PreprocessCrop(image, box, params);
+  }
   if (crop.empty()) return {"", 0.0f};
 
   int crop_h = crop.rows;
   int crop_w = crop.cols;
 
-  // 转换为 NCHW 浮点张量
-  std::vector<float> input_data(1 * 3 * crop_h * crop_w);
-  cv::Mat channels[3]; // SCREENSHOT_CMAKE_PATCHED: avoid STL ABI mismatch
-  cv::split(crop, channels);
-  for (int c = 0; c < 3; ++c) {
-    std::memcpy(input_data.data() + c * crop_h * crop_w,
-                channels[c].data, crop_h * crop_w * sizeof(float));
+  // 转换为 NCHW 浮点张量（融合快路径：一次遍历完成归一化）
+  std::vector<float> input_data(static_cast<size_t>(3) * crop_h * crop_w);
+  if (crop.type() == CV_8UC3 && crop.isContinuous()) {
+    FillNchwTensor(crop, input_data.data(), crop_h, crop_w,
+                   /*rec_style=*/true);
+  } else {
+    cv::Mat float_img;
+    crop.convertTo(float_img, CV_32FC3, 1.0 / 255.0);
+    float_img = (float_img - 0.5f) / 0.5f;
+    cv::Mat channels[3]; // SCREENSHOT_CMAKE_PATCHED: avoid STL ABI mismatch
+    cv::split(float_img, channels);
+    for (int c = 0; c < 3; ++c) {
+      std::memcpy(input_data.data() + static_cast<size_t>(c) * crop_h * crop_w,
+                  channels[c].data,
+                  static_cast<size_t>(crop_h) * crop_w * sizeof(float));
+    }
   }
 
   std::array<int64_t, 4> input_shape = {1, 3, crop_h, crop_w};
@@ -876,9 +960,11 @@ std::pair<std::string, float> TextRecognizer::RecognizeRegion(
   const char* out_names[] = {output_name_.c_str()};
 
   try {
+    PaddleOcrTimer t_infer("rec.infer");
     auto output_tensors = session_.Run(
         Ort::RunOptions{nullptr}, in_names, &input_tensor, 1,
         out_names, 1);
+    t_infer.Stop();
 
     float* output_data =
         output_tensors[0].GetTensorMutableData<float>();
@@ -946,7 +1032,7 @@ cv::Mat TextRecognizer::PreprocessCrop(
   cv::Mat resized;
   cv::resize(crop, resized, cv::Size(new_w, img_h));
 
-  // 宽度至少填充到 32
+  // 宽度至少填充到 32（右侧补零；归一化在 RecognizeRegion 里融合完成）
   int pad_w = std::max(new_w, 32);
   if (new_w < pad_w) {
     cv::Mat padded = cv::Mat::zeros(img_h, pad_w, resized.type());
@@ -954,13 +1040,8 @@ cv::Mat TextRecognizer::PreprocessCrop(
     resized = padded;
   }
 
-  // 归一化：pixel/255，然后 (x - 0.5) / 0.5
-  cv::Mat float_img;
-  resized.convertTo(float_img, CV_32FC3, 1.0 / 255.0);
-  float_img = (float_img - 0.5f) / 0.5f;
-
-  OCR_LOG("PreprocessCrop: final tensor %dx%d", float_img.cols, float_img.rows);
-  return float_img;
+  OCR_LOG("PreprocessCrop: final tensor %dx%d", resized.cols, resized.rows);
+  return resized;
 }
 
 // CTC 贪心解码
@@ -1153,6 +1234,10 @@ BranchConfig MakeBranchConfig(uint32_t flag, const OcrOptions& base) {
     case kBranchUpscale3x:
       // 3 倍放大：20px 级小字在 2x 下仍会偶发繁简误读（篮→籃），
       // 3x 时笔画细节充足。速度比 2x 慢一档，按需开启。
+      // 注意：检测输入必须给足 3×base。实测降到 2×base（文字在检测
+      // 输入里仍有 ~53px）会丢行首细笔画「一」的召回（"一舍篮球场…"
+      // 退化成 "合篮球场…"）—— 细横笔画的 DB 响应本就微弱，靠的就是
+      // 检测输入里的绝对尺寸。识别用的也是整张 3x 图，不冲突。
       cfg.name = "upscale3x";
       cfg.prep.scale_percent = 300;
       cfg.det.max_side_len = base.det.max_side_len * 3;
@@ -1428,14 +1513,21 @@ std::vector<cv::Point> OcrEngine::ScaleBoxToBranch(
 // ===========================================================================
 std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
                                                  const OcrOptions& options) {
+  PaddleOcrTimer t_pipeline("pipeline.total");
   const std::vector<BranchConfig> configs = BuildBranchConfigs(options);
 
-  // 步骤 1：每路「预处理 + 检测」彼此独立，并行执行。
+  // 步骤 1a：每路「预处理 + 输入张量构建」彼此独立，并行执行。
   // 结果先按配置下标写进槽位，收敛阶段再按固定顺序拼接 ——
   // branch_index 与 all_boxes 顺序和串行版完全一致。
+  //
+  // 与推理解耦成两个阶段的理由：OpenCV（resize/自适应阈值等）与 ORT 各有
+  // 自己的线程池，混在同一个并行 lane 里会互相抢核；分开后预处理吃满
+  // OpenCV 池、推理吃满 ORT 池，实测检测阶段墙钟明显下降。
   std::vector<BranchOutput> slots(configs.size());
   std::vector<char> slot_ok(configs.size(), 0);
-  ParallelFor(configs.size(), [&](size_t bi) {
+  {
+    PaddleOcrTimer t("pipeline.preprocess_phase");
+    ParallelFor(configs.size(), [&](size_t bi) {
     const BranchConfig& cfg = configs[bi];
 
     BranchOutput out;
@@ -1453,23 +1545,96 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
       return;
     }
 
-    out.boxes = detector_.DetectScored(out.image, cfg.det, static_cast<int>(bi));
-
-    // 框坐标从分支图换算回原图
-    if (std::abs(scale - 1.0) > 1e-9) {
-      for (auto& db : out.boxes) {
-        for (auto& pt : db.points) {
-          pt.x = static_cast<int>(std::round(pt.x / scale));
-          pt.y = static_cast<int>(std::round(pt.y / scale));
-        }
-      }
+    float ratio_h = 1.0f, ratio_w = 1.0f;
+    if (!detector_.BuildDetectInput(out.image, cfg.det, out.input, out.input_h,
+                                    out.input_w, ratio_h, ratio_w)) {
+      OCR_LOG("RunPipeline: branch[%zu '%s'] detect input build failed", bi,
+              cfg.name.c_str());
+      return;
     }
-
-    OCR_LOG("RunPipeline: branch[%zu '%s'] scale=%.2f detected %zu boxes", bi,
-            cfg.name.c_str(), scale, out.boxes.size());
+    out.ratio_h = ratio_h;
+    out.ratio_w = ratio_w;
     slots[bi] = std::move(out);
     slot_ok[bi] = 1;
-  }, kMaxBranchThreads);
+    }, kMaxBranchThreads);
+  }
+
+  // 步骤 1b：按「输入张量内容」给分支分组。
+  // 不同分支可能对同一张预处理图只用不同的后处理阈值（典型：raw 与
+  // sensitive 的预处理产物逐字节相同，只有 thresh/box_thresh/unclip
+  // 不同）—— 整组只需跑一次模型推理，组内每个分支各用自己的
+  // DetectParams 做后处理。分组只按内容判等（哈希 + 逐字节确认），
+  // 与分支顺序无关，不改变 branch_index 与 all_boxes 的最终顺序。
+  struct DetectGroup {
+    std::vector<size_t> members;  // 配置下标，升序（members[0] 是推理担当）
+  };
+  std::vector<DetectGroup> groups;
+  for (size_t bi = 0; bi < configs.size(); ++bi) {
+    if (!slot_ok[bi]) continue;
+    const BranchOutput& cand = slots[bi];
+    bool placed = false;
+    for (auto& g : groups) {
+      const BranchOutput& leader = slots[g.members[0]];
+      if (leader.input_h != cand.input_h || leader.input_w != cand.input_w) {
+        continue;
+      }
+      if (!TensorsBitwiseEqual(leader.input, cand.input)) continue;
+      g.members.push_back(bi);
+      placed = true;
+      break;
+    }
+    if (!placed) {
+      DetectGroup g;
+      g.members.push_back(bi);
+      groups.push_back(std::move(g));
+    }
+  }
+  OCR_LOG("RunPipeline: %zu branches -> %zu inference groups (dedup %zu)",
+          configs.size(), groups.size(),
+          configs.size() - groups.size());
+
+  // 步骤 1c：每组推理一次；组内每个分支用自己的 DetectParams 后处理，
+  // 并把框坐标换算回原图。组内后处理是轻量活（概率图阈值 + 轮廓），
+  // 串行做不足以抵消并行调度的开销。
+  {
+    PaddleOcrTimer t("pipeline.infer_phase");
+    ParallelFor(groups.size(), [&](size_t gi) {
+      const std::vector<size_t>& members = groups[gi].members;
+      const size_t leader = members[0];
+      std::vector<float> out_data;
+      int out_h = 0, out_w = 0;
+      if (!detector_.RunDetectInference(slots[leader].input.data(),
+                                        slots[leader].input_h,
+                                        slots[leader].input_w, out_data, out_h,
+                                        out_w)) {
+        return;
+      }
+      for (size_t bi : members) {
+        slots[bi].boxes = detector_.PostProcess(
+            out_data.data(), out_h, out_w, slots[bi].ratio_h, slots[bi].ratio_w,
+            configs[bi].det, static_cast<int>(bi));
+
+        // 框坐标从分支图换算回原图
+        if (std::abs(slots[bi].scale - 1.0) > 1e-9) {
+          for (auto& db : slots[bi].boxes) {
+            for (auto& pt : db.points) {
+              pt.x = static_cast<int>(std::round(pt.x / slots[bi].scale));
+              pt.y = static_cast<int>(std::round(pt.y / slots[bi].scale));
+            }
+          }
+        }
+
+        OCR_LOG("RunPipeline: branch[%zu '%s'] scale=%.2f detected %zu boxes",
+                bi, configs[bi].name.c_str(), slots[bi].scale,
+                slots[bi].boxes.size());
+      }
+    }, kMaxBranchThreads);
+  }
+
+  // 输入张量使命结束（识别阶段只用 8U 分支图），及时释放。
+  for (auto& s : slots) {
+    std::vector<float>().swap(s.input);
+  }
 
   // 收敛：保持配置顺序（决定 branch_index 与 all_boxes 顺序）
   std::vector<BranchOutput> branches;
@@ -1488,8 +1653,12 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
   }
 
   // 步骤2~3.5：合并 + 同行拼接 + 识别窗构造（成员基底 + 双向外扩）。
-  std::vector<MergedBox> regions =
-      MergeAndBuildWindows(all_boxes, options.merge, image.cols, image.rows);
+  std::vector<MergedBox> regions;
+  {
+    PaddleOcrTimer t("pipeline.merge");
+    regions = MergeAndBuildWindows(all_boxes, options.merge, image.cols,
+                                   image.rows);
+  }
 
   // 步骤4：择优识别（并行执行，见下方 ParallelFor）
 
@@ -1510,7 +1679,9 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
   std::vector<OcrBoxResult> results(regions.size());
   std::vector<char> keep(regions.size(), 0);
 
-  ParallelFor(regions.size(), [&](size_t ri) {
+  {
+    PaddleOcrTimer t("pipeline.recognize");
+    ParallelFor(regions.size(), [&](size_t ri) {
     const MergedBox& region = regions[ri];
     if (region.points.size() < 3) return;
 
@@ -1555,7 +1726,45 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
                           b.name + (contributed ? "*" : "")});
     }
 
+    // 候选得分的理论上界（用于「可证明安全」的提前收尾）。
+    //
+    // 打分公式（variant_select=4，默认）：
+    //   score = geometry + (raw_crop ? 2.0 : 0) + 0.001*scale
+    //   geometry = (5 - |fill-1|) + 0.05*conf + 0.001*len
+    // 由 EstimateTextWidthInEm 的权重（每字符 ≥ 0.35 字高）可得
+    //   len ≤ fill × expected_em / 0.35
+    // 而 geometry 对 fill 的导数在 fill>1 后恒为负（惩罚 +1/单位，
+    // 长度项最多 +0.001×expected_em/0.35/单位），因此 geometry 的极大值
+    // 出现在 fill≈1 处，为 5.05 + 0.001×(expected_em/0.35)。
+    // 取 len 上界为该值的 2 倍 + 32（宽松），得到：
+    //   未增强候选上界 = 5.05 + 0.001*len_ub + 2.0 + 0.001*scale_max
+    //   增强候选上界   = 5.05 + 0.001*len_ub + 0.001*scale_max
+    // 当前最优分一旦达到某类候选的上界，该类其余候选**数学上不可能**
+    // 翻盘，可以直接跳过 —— 最终结果与全量枚举逐位一致。
+    //
+    // 不适用早退的情形（上界取无穷大，行为与全量枚举完全一致）：
+    //   * variant_select 为 1/2：打分只看字符数，长度无上界；
+    //   * expected_em ≤ 0.5：退化区域（竖排单字等）走「len × conf」
+    //     分支，同样无上界；
+    //   * variant_select 为 0：上界是置信度 ≤ 1，用几何上界虽然合法但
+    //     永远触发不了，索性归入无穷大少一次比较。
+    const double expected_em = region_long / std::max(1.0, region_short);
+    const double len_ub = expected_em / 0.35 * 2.0 + 32.0;
+    const double scale_ub = 3.0;  // 最大分支放大倍数（upscale3x）
+    const double inf = std::numeric_limits<double>::infinity();
+    const bool bounded_scoring =
+        expected_em > 0.5 &&
+        (options.rec.variant_select == 3 || options.rec.variant_select == 4);
+    const double geom_ub =
+        bounded_scoring ? 5.05 + 0.001 * len_ub + 0.001 * scale_ub : inf;
+    const bool raw_bonus = (options.rec.variant_select == 4);
+    const double unenh_ub = bounded_scoring ? geom_ub + (raw_bonus ? 2.0 : 0.0)
+                                            : inf;
+    const double enh_ub = geom_ub;
+
+    bool all_done = false;  // 连未增强候选都不可能翻盘
     for (const Variant& variant : variants) {
+      if (all_done) break;
       const cv::Mat& src = *variant.img;
       std::vector<cv::Point> box = ScaleBoxToBranch(rec_window, variant.scale);
       // 夹到图内，避免边缘框在放大图上越界导致 warpPerspective 取空。
@@ -1565,6 +1774,15 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
       }
 
       for (int enhance : enhance_passes) {
+        // 提前收尾判据：当前最优已达该类候选的理论最高分。
+        // 未增强候选被「封顶」时，增强候选的上界更低，同样被跳过。
+        if (best_score >= (enhance == 0 ? unenh_ub : enh_ub)) {
+          if (enhance == 0) {
+            all_done = true;
+            break;
+          }
+          continue;
+        }
         RecognizeParams rp = options.rec;
         rp.enhance_crops = enhance;
         auto decoded = recognizer_.RecognizeRegion(src, box, rp);
@@ -1608,7 +1826,8 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
     r.confidence = best_conf;
     results[ri] = std::move(r);
     keep[ri] = 1;
-  }, kMaxRegionThreads);
+    }, kMaxRegionThreads);
+  }
 
   // 收敛：保持区域顺序
   std::vector<OcrBoxResult> out;
