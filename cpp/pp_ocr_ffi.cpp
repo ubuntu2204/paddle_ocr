@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 // 与根 pubspec.yaml 的 version 保持同步；example 界面会显示该字符串，
 // 用于核对 Dart 包与原生库的版本是否配套。
-static const char* kVersion = "pp_ocr 0.5.3";
+static const char* kVersion = "pp_ocr 0.5.4";
 
 // ---------------------------------------------------------------------------
 // 引擎包装器：持有 C++ OcrEngine 实例及可复用的结果缓冲区
@@ -786,7 +786,7 @@ PP_OCR_EXPORT int pp_ocr_recognize_boxes_bytes(
           static_cast<int>(std::lround(boxes[bi * 8 + j * 2 + 1])));
     }
     texts[bi] = engine->engine.RecognizeBox(image, points, parsed.rec);
-  }, paddle_ocr::kMaxRegionThreads);
+  }, paddle_ocr::RegionThreads());
 
   // 先稳定字符串存储，再建指针表（与 convertResults 同一套防悬空手法）。
   engine->batch_text_buffers.clear();

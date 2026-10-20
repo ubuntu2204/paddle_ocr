@@ -788,6 +788,19 @@ TEST(VariantScoring, GeometryFitPenalisesBothUnderAndOverReading) {
   EXPECT_GT(s_good, s_long) << "插字的乱码必须输给读全的";
 }
 
+TEST(VariantScoring, FullLineBeatsDroppedLeadingCharWithinFillTolerance) {
+  // 实测回归（监控字幕行）：同一区域里「一舍篮球场东北路口球G66-5724」
+  // 与「合篮球场东北路口球G66-5724」（行首「一」被并进「舍」）的估算宽度
+  // 只差 ~7%。没有 ±10% 死区时，读全的那一行会因为 fill 略大于 1 被扣分，
+  // 反而输给少读一个字的候选。
+  const double long_side = 254, short_side = 19;  // 13.4 个字高
+  const double full = VariantSelectionScore(
+      4, "一舍篮球场东北路口球G66-5724", 1.0f, long_side, short_side, true);
+  const double merged = VariantSelectionScore(
+      4, "合篮球场东北路口球G66-5724", 1.0f, long_side, short_side, true);
+  EXPECT_GT(full, merged) << "读全整行必须胜过少读一个字的近似读法";
+}
+
 TEST(VariantScoring, RawCropWinsTiesOverEnhancedCrop) {
   // 同一区域、同样契合度时，未二次增强的候选优先（实测增强会偶发丢字）
   const double long_side = 260, short_side = 20;

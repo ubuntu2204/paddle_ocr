@@ -73,7 +73,9 @@ static double ScoreVariant(const std::string& text, double conf, double long_sid
     }
     const double fill = actual / expected_em;
     const double deviation = fill > 1.0 ? fill - 1.0 : 1.0 - fill;
-    const double penalty = deviation > 5.0 ? 5.0 : deviation;
+    // ±10% 死区，与原生 VariantSelectionScore / Dart scoreVariant 一致。
+    const double exceeded = deviation <= 0.10 ? 0.0 : deviation - 0.10;
+    const double penalty = exceeded > 5.0 ? 5.0 : exceeded;
     geometry = (5.0 - penalty) + 0.05 * conf + 0.001 * static_cast<double>(len);
   }
   return geometry + (raw_crop ? 2.0 : 0.0) + 0.001 * scale;

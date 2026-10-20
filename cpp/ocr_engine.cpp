@@ -12,6 +12,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <numeric>
 #include <sstream>
@@ -909,7 +910,7 @@ std::vector<std::pair<std::string, float>> TextRecognizer::Recognize(
       return;
     }
     results[bi] = RecognizeRegion(image, boxes[bi], params);
-  }, kMaxRegionThreads);
+  }, RegionThreads());
   return results;
 }
 
@@ -1503,22 +1504,136 @@ std::vector<cv::Point> OcrEngine::ScaleBoxToBranch(
 }
 
 // ===========================================================================
+// 放大分支（detail 分支）的检测 ROI 规划
+//
+// 放大分支的检测开销随输入面积线性增长（2x ≈ 4 倍、3x ≈ 9 倍于 1x），而
+// 文字通常只占画面很小一块。先用 1x 分支把候选区全图扫出来，再让放大
+// 分支只在「候选区 + 外扩」内检测：文字附近的像素一个不少，画面空白处
+// 不再为 3x 分辨率买单。
+//
+// 合并规则：
+//   1. 每个检出框先外扩（按短边 = 字高定）—— 文字行方向 2.5 倍字高
+//      （1x 检测常把行尾几个字符切掉，留宽才能让放大分支补回来），
+//      垂直方向 1 倍字高（DB 取上下文够用，给多了只是把上下景物拖进 3x
+//      推理）。不能用框高定外扩：一个跨多行的碎块高度可达上百像素，
+//      按它外扩会把 ROI 铺回半张图，优化就失去意义了；
+//   2. 相交或间隙小于半个字高的矩形合并成一块（同一行的碎框、上下两行
+//      字幕各算一块），避免因 ROI 边界把一行字切断；
+//   3. 数量超过上限时，把面积最小的一块并给「并起来最省面积」的邻居，
+//      防止 ROI 数量退化成逐框一次推理。
+// =========================================================================
+static cv::Rect InflateRect(const cv::Rect& r, int gap) {
+  return cv::Rect(r.x - gap, r.y - gap, r.width + 2 * gap, r.height + 2 * gap);
+}
+
+static std::vector<cv::Rect> PlanDetailRois(
+    const std::vector<DetectedBox>& boxes, int img_w, int img_h) {
+  const cv::Rect image_rect(0, 0, img_w, img_h);
+  std::vector<cv::Rect> rects;
+  rects.reserve(boxes.size());
+  for (const auto& db : boxes) {
+    const cv::Rect r = BoxBoundingRect(db.points) & image_rect;
+    if (r.width < 2 || r.height < 2) continue;
+    const int em = std::min(r.width, r.height);
+    // 水平（文字行方向）给足 2.5 倍字高：1x 检测常把行尾几个字符切掉，
+    // 留宽一点才能让放大分支把它们补回来；垂直方向 1 倍字高就够 DB 取
+    // 上下文，给多了只是把上下一整片景物拖进 3x 推理。
+    const int pad_x = std::max(12, std::min(60, 5 * em / 2));
+    const int pad_y = std::max(8, std::min(24, em));
+    rects.push_back((cv::Rect(r.x - pad_x, r.y - pad_y, r.width + 2 * pad_x,
+                              r.height + 2 * pad_y)) & image_rect);
+  }
+  if (rects.empty()) return rects;
+
+  // 相交 / 近邻合并（O(n^2 × 轮数)，n 是 1x 检出框数，量级几十）。
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (size_t i = 0; i < rects.size() && !changed; ++i) {
+      for (size_t j = i + 1; j < rects.size(); ++j) {
+        const int gap = std::max(4, std::min(8, std::min(rects[i].height,
+                                             rects[j].height) / 2));
+        if ((InflateRect(rects[i], gap) & rects[j]).area() > 0) {
+          rects[i] |= rects[j];
+          rects.erase(rects.begin() + static_cast<long>(j));
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // 最小尺寸：太小的 ROI 让 DB 失去上下文，也摊不平一次推理的固定开销。
+  const int kMinW = 64, kMinH = 48;
+  for (auto& r : rects) {
+    if (r.width < kMinW) {
+      r.x -= (kMinW - r.width) / 2;
+      r.width = kMinW;
+    }
+    if (r.height < kMinH) {
+      r.y -= (kMinH - r.height) / 2;
+      r.height = kMinH;
+    }
+    r &= image_rect;
+  }
+
+  constexpr size_t kMaxDetailRois = 8;
+  while (rects.size() > kMaxDetailRois) {
+    size_t smallest = 0;
+    for (size_t i = 1; i < rects.size(); ++i) {
+      if (rects[i].area() < rects[smallest].area()) smallest = i;
+    }
+    size_t best = SIZE_MAX;
+    long long best_area = std::numeric_limits<long long>::max();
+    for (size_t i = 0; i < rects.size(); ++i) {
+      if (i == smallest) continue;
+      const long long merged_area =
+          static_cast<long long>((rects[i] | rects[smallest]).area());
+      if (merged_area < best_area) {
+        best_area = merged_area;
+        best = i;
+      }
+    }
+    rects[best] |= rects[smallest];
+    rects.erase(rects.begin() + static_cast<long>(smallest));
+  }
+
+  std::sort(rects.begin(), rects.end(), [](const cv::Rect& a, const cv::Rect& b) {
+    if (a.y != b.y) return a.y < b.y;
+    return a.x < b.x;
+  });
+  return rects;
+}
+
+// 诊断开关：置 1 时放大分支恢复「整图检测」的历史行为（对照/回滚用）。
+static bool DetailFullImageEnabled() {
+  static const bool enabled = [] {
+    const char* v = std::getenv("PP_OCR_DETAIL_FULL");
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+  }();
+  return enabled;
+}
+
+// ===========================================================================
 // 多分支完整管道
 //
 //   1. 每一路预处理 → 检测 → 把框换算回原图坐标
+//      · 基础分支（1x）整图检测，负责「把字找全」；
+//      · 放大分支（2x/3x）只在基础分支检出的 ROI 内外检测（见
+//        PlanDetailRois），文字附近细节不变、空白区域不再按 9 倍面积付费。
 //   2. 跨分支去重合并（同一区域只留一个框，但记住是哪几路贡献的）
 //   3. 同行碎框拼接（把一行被切碎的字合成整行）
-//   4. 择优识别：同一个区域在「原图 + 各贡献分支图」上各识别一次，
-//      取「字符数 × 置信度」最高的结果
+//   4. 择优识别：同一个区域在「原图 + 各分支图」上各识别一次，按
+//      「结果宽度 vs 区域长宽比」打分取最优（见 VariantSelectionScore）
 // ===========================================================================
 std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
                                                  const OcrOptions& options) {
   PaddleOcrTimer t_pipeline("pipeline.total");
   const std::vector<BranchConfig> configs = BuildBranchConfigs(options);
 
-  // 步骤 1a：每路「预处理 + 输入张量构建」彼此独立，并行执行。
-  // 结果先按配置下标写进槽位，收敛阶段再按固定顺序拼接 ——
-  // branch_index 与 all_boxes 顺序和串行版完全一致。
+  // 步骤 1a：每路预处理（彼此独立，并行执行）。
+  // 基础分支（1x）顺手构建整图检测张量；放大分支不在这里构建 —— 整图 3x
+  // 输入张量是 3 通道 × 3168 × 1472 × 4B ≈ 56MB，而它最终只会用到 ROI
+  // 那一小块（步骤 1d）。
   //
   // 与推理解耦成两个阶段的理由：OpenCV（resize/自适应阈值等）与 ORT 各有
   // 自己的线程池，混在同一个并行 lane 里会互相抢核；分开后预处理吃满
@@ -1545,21 +1660,24 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
       return;
     }
 
-    float ratio_h = 1.0f, ratio_w = 1.0f;
-    if (!detector_.BuildDetectInput(out.image, cfg.det, out.input, out.input_h,
-                                    out.input_w, ratio_h, ratio_w)) {
-      OCR_LOG("RunPipeline: branch[%zu '%s'] detect input build failed", bi,
-              cfg.name.c_str());
-      return;
+    out.detail = scale > 1.0 + 1e-9 && !DetailFullImageEnabled();
+    if (!out.detail) {
+      float ratio_h = 1.0f, ratio_w = 1.0f;
+      if (!detector_.BuildDetectInput(out.image, cfg.det, out.input, out.input_h,
+                                      out.input_w, ratio_h, ratio_w)) {
+        OCR_LOG("RunPipeline: branch[%zu '%s'] detect input build failed", bi,
+                cfg.name.c_str());
+        return;
+      }
+      out.ratio_h = ratio_h;
+      out.ratio_w = ratio_w;
     }
-    out.ratio_h = ratio_h;
-    out.ratio_w = ratio_w;
     slots[bi] = std::move(out);
     slot_ok[bi] = 1;
-    }, kMaxBranchThreads);
+    }, BranchThreads());
   }
 
-  // 步骤 1b：按「输入张量内容」给分支分组。
+  // 步骤 1b：按「输入张量内容」给**基础分支**分组。
   // 不同分支可能对同一张预处理图只用不同的后处理阈值（典型：raw 与
   // sensitive 的预处理产物逐字节相同，只有 thresh/box_thresh/unclip
   // 不同）—— 整组只需跑一次模型推理，组内每个分支各用自己的
@@ -1569,8 +1687,13 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
     std::vector<size_t> members;  // 配置下标，升序（members[0] 是推理担当）
   };
   std::vector<DetectGroup> groups;
+  std::vector<size_t> detail_branches;
   for (size_t bi = 0; bi < configs.size(); ++bi) {
     if (!slot_ok[bi]) continue;
+    if (slots[bi].detail) {
+      detail_branches.push_back(bi);
+      continue;
+    }
     const BranchOutput& cand = slots[bi];
     bool placed = false;
     for (auto& g : groups) {
@@ -1589,13 +1712,14 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
       groups.push_back(std::move(g));
     }
   }
-  OCR_LOG("RunPipeline: %zu branches -> %zu inference groups (dedup %zu)",
+  OCR_LOG("RunPipeline: %zu branches -> %zu base groups (dedup %zu), %zu detail",
           configs.size(), groups.size(),
-          configs.size() - groups.size());
+          configs.size() - detail_branches.size() - groups.size(),
+          detail_branches.size());
 
   // 步骤 1c：每组推理一次；组内每个分支用自己的 DetectParams 后处理，
   // 并把框坐标换算回原图。组内后处理是轻量活（概率图阈值 + 轮廓），
-  // 串行做不足以抵消并行调度的开销。
+  // 串行做不足以抵消并行调度开销。
   {
     PaddleOcrTimer t("pipeline.infer_phase");
     ParallelFor(groups.size(), [&](size_t gi) {
@@ -1628,7 +1752,103 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
                 bi, configs[bi].name.c_str(), slots[bi].scale,
                 slots[bi].boxes.size());
       }
-    }, kMaxBranchThreads);
+    }, BranchThreads());
+  }
+
+  // 步骤 1d：放大分支按 ROI 检测。
+  // ROI 由基础分支的检出框规划（PlanDetailRois）；基础分支全无检出时
+  // 没有任何依据可以裁剪，退回整图，与历史行为一致。
+  if (!detail_branches.empty()) {
+    PaddleOcrTimer t("pipeline.detail_phase");
+    std::vector<DetectedBox> base_boxes;
+    for (size_t bi = 0; bi < configs.size(); ++bi) {
+      if (!slot_ok[bi] || slots[bi].detail) continue;
+      base_boxes.insert(base_boxes.end(), slots[bi].boxes.begin(),
+                        slots[bi].boxes.end());
+    }
+    std::vector<cv::Rect> rois =
+        PlanDetailRois(base_boxes, image.cols, image.rows);
+    // ROI 只在「确实能省面积」时才用：ROI 面积已接近整图时（小图、满屏
+    // 文字），拆开只会多付几次推理的固定开销，还会因裁剪边界丢掉上下文。
+    double roi_area = 0.0;
+    for (const auto& r : rois) roi_area += static_cast<double>(r.area());
+    const double image_area =
+        static_cast<double>(image.cols) * static_cast<double>(image.rows);
+    if (rois.empty() || roi_area > 0.9 * image_area) {
+      rois.assign(1, cv::Rect(0, 0, image.cols, image.rows));
+      roi_area = image_area;
+    }
+    OCR_LOG("RunPipeline: detail rois=%zu coverage=%.1f%%", rois.size(),
+            100.0 * roi_area / std::max(1.0, image_area));
+#if PADDLE_OCR_DEBUG
+    for (const auto& r : rois) {
+      OCR_LOG("  roi x=%d..%d y=%d..%d", r.x, r.x + r.width, r.y,
+              r.y + r.height);
+    }
+#endif
+
+    // 任务 = (放大分支 × ROI)。ROI 之间互不重叠，因此各任务的检出框
+    // 天然不重复；结果先按任务下标收敛，再按「分支 → ROI 顺序」拼接。
+    const size_t nroi = rois.size();
+    const size_t ntasks = detail_branches.size() * nroi;
+    std::vector<std::vector<DetectedBox>> task_boxes(ntasks);
+    ParallelFor(ntasks, [&](size_t task) {
+      const size_t bi = detail_branches[task / nroi];
+      const cv::Rect& roi = rois[task % nroi];
+      const double scale = slots[bi].scale;
+
+      // ROI（原图坐标）→ 分支图坐标
+      cv::Rect crop_rect(
+          static_cast<int>(std::lround(roi.x * scale)),
+          static_cast<int>(std::lround(roi.y * scale)),
+          static_cast<int>(std::lround(roi.width * scale)),
+          static_cast<int>(std::lround(roi.height * scale)));
+      crop_rect &= cv::Rect(0, 0, slots[bi].image.cols, slots[bi].image.rows);
+      if (crop_rect.width < 16 || crop_rect.height < 16) return;
+
+      std::vector<float> input;
+      int in_h = 0, in_w = 0;
+      float ratio_h = 1.0f, ratio_w = 1.0f;
+      if (!detector_.BuildDetectInput(slots[bi].image(crop_rect),
+                                      configs[bi].det, input, in_h, in_w,
+                                      ratio_h, ratio_w)) {
+        return;
+      }
+      std::vector<float> out_data;
+      int out_h = 0, out_w = 0;
+      if (!detector_.RunDetectInference(input.data(), in_h, in_w, out_data,
+                                        out_h, out_w)) {
+        return;
+      }
+      auto boxes = detector_.PostProcess(out_data.data(), out_h, out_w, ratio_h,
+                                         ratio_w, configs[bi].det,
+                                         static_cast<int>(bi));
+      // 坐标：ROI 内 → 分支图 → 原图
+      for (auto& db : boxes) {
+        for (auto& pt : db.points) {
+          pt.x = static_cast<int>(
+              std::lround((pt.x + crop_rect.x) / scale));
+          pt.y = static_cast<int>(
+              std::lround((pt.y + crop_rect.y) / scale));
+        }
+      }
+      task_boxes[task] = std::move(boxes);
+    }, BranchThreads());
+
+    for (size_t task = 0; task < ntasks; ++task) {
+      const size_t bi = detail_branches[task / nroi];
+      slots[bi].boxes.insert(slots[bi].boxes.end(),
+                             std::make_move_iterator(task_boxes[task].begin()),
+                             std::make_move_iterator(task_boxes[task].end()));
+    }
+#if PADDLE_OCR_DEBUG
+    for (size_t bi : detail_branches) {
+      OCR_LOG("RunPipeline: branch[%zu '%s'] scale=%.2f detected %zu boxes "
+              "in %zu rois",
+              bi, configs[bi].name.c_str(), slots[bi].scale,
+              slots[bi].boxes.size(), nroi);
+    }
+#endif
   }
 
   // 输入张量使命结束（识别阶段只用 8U 分支图），及时释放。
@@ -1674,25 +1894,46 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
       break;
   }
 
-  // 步骤4：择优识别。各区域彼此独立（Region 内部顺序尝试各变体），
-  // 并行执行；结果按区域下标回填，收敛后顺序与串行完全一致。
-  std::vector<OcrBoxResult> results(regions.size());
-  std::vector<char> keep(regions.size(), 0);
+  // 步骤4：择优识别。
+  //
+  // 同一区域要在「原图 + 各分支图」×「原样 / 二次增强」上各识别一次。
+  // 候选之间彼此独立，先拍平成一张任务表（只做几何运算，不做推理），再按
+  // 「区域」分组并行：每个 worker 包干本区域的全部候选，区域的择优顺序与
+  // 串行版完全一致（同分保留先出现者）。
+  struct RecVariant {
+    const cv::Mat* img = nullptr;
+    double scale = 1.0;
+    std::string label;
+  };
+  struct RecTask {
+    size_t region = 0;              // 所属区域下标
+    std::vector<cv::Point> box;     // 该变体上的裁剪框（已夹到图内）
+    const cv::Mat* img = nullptr;
+    int enhance = 0;
+    std::string label;
+    double scale = 1.0;
+    double region_long = 0.0;
+    double region_short = 0.0;
+    // 增强候选的得分上界（见构建处的推导）。区域最优分一旦达到它，
+    // 同区域所有「二次增强」候选数学上都不可能翻盘，直接跳过。
+    double enhance_ub = std::numeric_limits<double>::infinity();
+  };
+  struct RecCandidate {
+    std::string text;
+    float confidence = 0.0f;
+    double score = -std::numeric_limits<double>::infinity();
+    std::string from;
+  };
 
-  {
-    PaddleOcrTimer t("pipeline.recognize");
-    ParallelFor(regions.size(), [&](size_t ri) {
+  std::vector<RecTask> tasks;
+  tasks.reserve(regions.size() * enhance_passes.size() * 4);
+  for (size_t ri = 0; ri < regions.size(); ++ri) {
     const MergedBox& region = regions[ri];
-    if (region.points.size() < 3) return;
+    if (region.points.size() < 3) continue;
 
     // region.points 已经是识别窗（成员基底 + 双向外扩，见
     // MergeAndBuildWindows），直接用于裁剪识别。
     const std::vector<cv::Point>& rec_window = region.points;
-
-    std::string best_text;
-    float best_conf = 0.0f;
-    double best_score = -std::numeric_limits<double>::infinity();
-    std::string best_from;
     // 打分几何用「识别窗」：窗长边是候选文本的真实可用宽度；短边用
     // 成员统计出的字高（union 短边被贴边碎片撑大后，expected_em 被
     // 低估，会奖励「读少了」的候选、漏掉读全的候选）。
@@ -1701,14 +1942,34 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
         region.text_height > 0.0 ? region.text_height
                                  : BoxShortSide(rec_window);
 
+    // 增强候选（enhance=1）的得分上界。
+    //
+    // 打分公式（variant_select=4）：
+    //   score = geometry + (raw_crop ? 2.0 : 0) + 0.001*scale
+    //   geometry = 5 - penalty + 0.05*conf + 0.001*len
+    //   penalty = |fill-1| 超出 10% 死区的部分（封顶 5.0）
+    // 增强候选没有 raw 加成，且 geometry ≤ 5.05 + 0.001*len。取一个宽松的
+    // 长度上界 len_ub（按「每字符至少 0.35 字高」反推，再乘 2 加 32），即可得
+    // 增强类的上界；区域最优分一旦到顶，后续增强候选不必再跑。
+    //
+    // 未增强类（+2.0 raw 加成）的上界是不可达的：它要求 fill 恰好为 1、
+    // conf 为 1 且长度顶到上界，实测永不触发，因此不做那一档的剪枝。
+    // 退化区域（expected_em ≤ 0.5，竖排单字等）与 variant_select 0/1/2
+    // 无此结构，上界取无穷大（行为与全量枚举一致）。
+    const double expected_em = region_long / std::max(1.0, region_short);
+    const double len_ub = expected_em / 0.35 * 2.0 + 32.0;
+    const double scale_ub = 3.0;  // 最大分支放大倍数（upscale3x）
+    const bool bounded_scoring =
+        expected_em > 0.5 &&
+        (options.rec.variant_select == 3 || options.rec.variant_select == 4);
+    const double enhance_ub =
+        bounded_scoring
+            ? 5.05 + 0.001 * len_ub + 0.001 * scale_ub
+            : std::numeric_limits<double>::infinity();
+
     // 候选变体：原图 + 各分支图。try_all_branches 时连没检出该区域的
     // 分支也试 —— 放大分支往往能提供更多笔画细节。
-    struct Variant {
-      const cv::Mat* img;
-      double scale;
-      std::string label;
-    };
-    std::vector<Variant> variants;
+    std::vector<RecVariant> variants;
     variants.push_back({&image, 1.0, "raw"});
     for (const BranchOutput& b : branches) {
       // 二值化/白字提取类分支只负责「把框找全」，它们的像素不能喂识别器。
@@ -1722,119 +1983,102 @@ std::vector<OcrBoxResult> OcrEngine::RunPipeline(const cv::Mat& image,
       // raw 分支不缩放时与原图完全等价，不必重复跑。
       if (b.flag == kBranchRaw && std::abs(b.scale - 1.0) < 1e-9) continue;
       if (b.image.empty()) continue;
-      variants.push_back({&b.image, b.scale,
-                          b.name + (contributed ? "*" : "")});
+      variants.push_back(
+          {&b.image, b.scale, b.name + (contributed ? "*" : "")});
     }
 
-    // 候选得分的理论上界（用于「可证明安全」的提前收尾）。
-    //
-    // 打分公式（variant_select=4，默认）：
-    //   score = geometry + (raw_crop ? 2.0 : 0) + 0.001*scale
-    //   geometry = (5 - |fill-1|) + 0.05*conf + 0.001*len
-    // 由 EstimateTextWidthInEm 的权重（每字符 ≥ 0.35 字高）可得
-    //   len ≤ fill × expected_em / 0.35
-    // 而 geometry 对 fill 的导数在 fill>1 后恒为负（惩罚 +1/单位，
-    // 长度项最多 +0.001×expected_em/0.35/单位），因此 geometry 的极大值
-    // 出现在 fill≈1 处，为 5.05 + 0.001×(expected_em/0.35)。
-    // 取 len 上界为该值的 2 倍 + 32（宽松），得到：
-    //   未增强候选上界 = 5.05 + 0.001*len_ub + 2.0 + 0.001*scale_max
-    //   增强候选上界   = 5.05 + 0.001*len_ub + 0.001*scale_max
-    // 当前最优分一旦达到某类候选的上界，该类其余候选**数学上不可能**
-    // 翻盘，可以直接跳过 —— 最终结果与全量枚举逐位一致。
-    //
-    // 不适用早退的情形（上界取无穷大，行为与全量枚举完全一致）：
-    //   * variant_select 为 1/2：打分只看字符数，长度无上界；
-    //   * expected_em ≤ 0.5：退化区域（竖排单字等）走「len × conf」
-    //     分支，同样无上界；
-    //   * variant_select 为 0：上界是置信度 ≤ 1，用几何上界虽然合法但
-    //     永远触发不了，索性归入无穷大少一次比较。
-    const double expected_em = region_long / std::max(1.0, region_short);
-    const double len_ub = expected_em / 0.35 * 2.0 + 32.0;
-    const double scale_ub = 3.0;  // 最大分支放大倍数（upscale3x）
-    const double inf = std::numeric_limits<double>::infinity();
-    const bool bounded_scoring =
-        expected_em > 0.5 &&
-        (options.rec.variant_select == 3 || options.rec.variant_select == 4);
-    const double geom_ub =
-        bounded_scoring ? 5.05 + 0.001 * len_ub + 0.001 * scale_ub : inf;
-    const bool raw_bonus = (options.rec.variant_select == 4);
-    const double unenh_ub = bounded_scoring ? geom_ub + (raw_bonus ? 2.0 : 0.0)
-                                            : inf;
-    const double enh_ub = geom_ub;
-
-    bool all_done = false;  // 连未增强候选都不可能翻盘
-    for (const Variant& variant : variants) {
-      if (all_done) break;
-      const cv::Mat& src = *variant.img;
-      std::vector<cv::Point> box = ScaleBoxToBranch(rec_window, variant.scale);
+    for (const RecVariant& v : variants) {
+      std::vector<cv::Point> box = ScaleBoxToBranch(rec_window, v.scale);
       // 夹到图内，避免边缘框在放大图上越界导致 warpPerspective 取空。
       for (auto& pt : box) {
-        pt.x = std::max(0, std::min(src.cols - 1, pt.x));
-        pt.y = std::max(0, std::min(src.rows - 1, pt.y));
+        pt.x = std::max(0, std::min(v.img->cols - 1, pt.x));
+        pt.y = std::max(0, std::min(v.img->rows - 1, pt.y));
       }
-
       for (int enhance : enhance_passes) {
-        // 提前收尾判据：当前最优已达该类候选的理论最高分。
-        // 未增强候选被「封顶」时，增强候选的上界更低，同样被跳过。
-        if (best_score >= (enhance == 0 ? unenh_ub : enh_ub)) {
-          if (enhance == 0) {
-            all_done = true;
-            break;
-          }
-          continue;
-        }
+        RecTask task;
+        task.region = ri;
+        task.box = box;
+        task.img = v.img;
+        task.enhance = enhance;
+        task.label = v.label;
+        task.scale = v.scale;
+        task.region_long = region_long;
+        task.region_short = region_short;
+        task.enhance_ub = enhance_ub;
+        tasks.push_back(std::move(task));
+      }
+    }
+  }
+
+  std::vector<RecCandidate> cands(tasks.size());
+  {
+    PaddleOcrTimer t("pipeline.recognize");
+    // 并行度按「区域」切：一个 worker 包干本区域的全部候选。
+    // 不能改成「按候选切」：ORT 会话的 intra-op 线程池只有几个线程，
+    // 同时发起几十个 Run 会让每个 Run 都在池子里排队，实测单次调用墙钟
+    // 从 45ms 涨到 180ms，整体反而更慢。
+    ParallelFor(regions.size(), [&](size_t ri) {
+      double best_score = -std::numeric_limits<double>::infinity();
+      for (size_t ti = 0; ti < tasks.size(); ++ti) {
+        if (tasks[ti].region != ri) continue;
+        const RecTask& task = tasks[ti];
+        // 提前收尾：区域最优分已达到增强类上界，剩下的增强候选翻不了盘。
+        if (task.enhance != 0 && best_score >= task.enhance_ub) continue;
         RecognizeParams rp = options.rec;
-        rp.enhance_crops = enhance;
-        auto decoded = recognizer_.RecognizeRegion(src, box, rp);
+        rp.enhance_crops = task.enhance;
+        auto decoded = recognizer_.RecognizeRegion(*task.img, task.box, rp);
         if (decoded.first.empty()) continue;
 
-        const double score =
-            VariantSelectionScore(rp.variant_select, decoded.first,
-                                  decoded.second, region_long, region_short,
-                                  /*raw_crop = */ enhance == 0) +
+        RecCandidate& c = cands[ti];
+        c.text = std::move(decoded.first);
+        c.confidence = decoded.second;
+        c.score =
+            VariantSelectionScore(rp.variant_select, c.text, c.confidence,
+                                  task.region_long, task.region_short,
+                                  /*raw_crop = */ task.enhance == 0) +
             // 平局破除：PP-OCR 的 CTC 置信度极易饱和（不同变体都是
             // 1.000），几何得分也可能完全相同。此时放大分支的候选拥有
             // 更多笔画细节，实测比 1x 原图更可靠（1x 把「舍」读成
             // 「合」，2x/3x 正确）。权重远小于几何差异，只做同分裁决。
-            0.001 * variant.scale;
+            0.001 * task.scale;
+        c.from = task.label + (task.enhance ? "+enh" : "");
+        if (c.score > best_score) best_score = c.score;
         OCR_LOG("RunPipeline: region[%zu] variant='%s%s' em=%.2f/%.2f "
                 "score=%.3f conf=%.3f '%s'",
-                ri, variant.label.c_str(), enhance ? "+enh" : "",
-                EstimateTextWidthInEm(decoded.first), region_long / region_short,
-                score, decoded.second, decoded.first.c_str());
-        if (score > best_score) {
-          best_score = score;
-          best_text = std::move(decoded.first);
-          best_conf = decoded.second;
-          best_from = variant.label + (enhance ? "+enh" : "");
-        }
+                task.region, task.label.c_str(), task.enhance ? "+enh" : "",
+                EstimateTextWidthInEm(c.text),
+                task.region_long / std::max(1.0, task.region_short), c.score,
+                c.confidence, c.text.c_str());
       }
-    }
-
-    if (best_text.empty()) return;
-
-    if (options.verbose_stats) {
-      OCR_LOG("RunPipeline: region[%zu] variants=%zu members=%d stitched=%d "
-              "from='%s' -> '%s' (%.3f)",
-              ri, variants.size(), region.member_count, region.stitched ? 1 : 0,
-              best_from.c_str(), best_text.c_str(), best_conf);
-    }
-
-    OcrBoxResult r;
-    r.box = region.points;
-    r.text = std::move(best_text);
-    r.confidence = best_conf;
-    results[ri] = std::move(r);
-    keep[ri] = 1;
-    }, kMaxRegionThreads);
+    }, RegionThreads());
   }
 
-  // 收敛：保持区域顺序
+  // 收敛：按「区域 → 变体 → 增强档」的原始顺序取最优（同分保留先出现者）
   std::vector<OcrBoxResult> out;
-  out.reserve(results.size());
-  for (size_t ri = 0; ri < results.size(); ++ri) {
-    if (!keep[ri]) continue;
-    out.push_back(std::move(results[ri]));
+  out.reserve(regions.size());
+  size_t next_task = 0;
+  for (size_t ri = 0; ri < regions.size(); ++ri) {
+    const RecCandidate* best = nullptr;
+    for (; next_task < tasks.size() && tasks[next_task].region == ri;
+         ++next_task) {
+      const RecCandidate& c = cands[next_task];
+      if (c.text.empty()) continue;
+      if (best == nullptr || c.score > best->score) best = &c;
+    }
+    if (best == nullptr) continue;
+
+    const MergedBox& region = regions[ri];
+    if (options.verbose_stats) {
+      OCR_LOG("RunPipeline: region[%zu] members=%d stitched=%d from='%s' -> "
+              "'%s' (%.3f)",
+              ri, region.member_count, region.stitched ? 1 : 0,
+              best->from.c_str(), best->text.c_str(), best->confidence);
+    }
+    OcrBoxResult r;
+    r.box = region.points;
+    r.text = best->text;
+    r.confidence = best->confidence;
+    out.push_back(std::move(r));
   }
 
   OCR_LOG("RunPipeline: %zu branches, %zu boxes -> %zu regions -> %zu texts",

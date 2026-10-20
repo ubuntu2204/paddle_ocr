@@ -28,7 +28,8 @@ double estimateTextWidthInEm(String text) {
     if (cp == 0x20) {
       em += 0.35;
     } else if (cp >= 0x20 && cp <= 0x7E) {
-      final alnum = (cp >= 0x30 && cp <= 0x39) ||
+      final alnum =
+          (cp >= 0x30 && cp <= 0x39) ||
           (cp >= 0x41 && cp <= 0x5A) ||
           (cp >= 0x61 && cp <= 0x7A);
       em += alnum ? 0.60 : 0.35;
@@ -66,7 +67,15 @@ double scoreVariant(
     final actualEm = estimateTextWidthInEm(text);
     final fill = actualEm / expectedEm;
     final deviation = (fill - 1.0).abs();
-    final penalty = deviation > 5.0 ? 5.0 : deviation;
+    // ±10% 死区：expectedEm 由「区域长宽比 × 字宽经验表」推得，本身就有
+    // 约 ±10% 的误差；而「少读一个字」与「读全整行」的 fill 差往往只有
+    // 5~15%。没有死区时读全的那一行会因 fill 略大于 1 反而输给读少的
+    // 候选（详见原生 VariantSelectionScore 的同名注释）。
+    const fillTolerance = 0.10;
+    final exceeded = deviation <= fillTolerance
+        ? 0.0
+        : deviation - fillTolerance;
+    final penalty = exceeded > 5.0 ? 5.0 : exceeded;
     geometry = (5.0 - penalty) + 0.05 * confidence + 0.001 * len;
   }
   const rawCropBonus = 2.0;
@@ -90,9 +99,7 @@ List<OcrResult> runOcrPipeline({
   required OcrOptions options,
 }) {
   // ---- 1. 生成变体 ----
-  final variants = <_Variant>[
-    _Variant(imageBytes, 1.0, true, 'raw'),
-  ];
+  final variants = <_Variant>[_Variant(imageBytes, 1.0, true, 'raw')];
   for (final p in preprocessors) {
     if (p is NativeTransformPreprocessor) {
       final paramsPtr = calloc<PpOcrTransformParamsC>();
@@ -101,12 +108,9 @@ List<OcrResult> runOcrPipeline({
         final out = bindings.preprocessBytes(engine, imageBytes, paramsPtr);
         if (out != null) {
           final data = out.data.asTypedList(out.size);
-          variants.add(_Variant(
-            Uint8List.fromList(data),
-            p.scale,
-            p.recSource,
-            p.name,
-          ));
+          variants.add(
+            _Variant(Uint8List.fromList(data), p.scale, p.recSource, p.name),
+          );
         }
       } finally {
         calloc.free(paramsPtr);
@@ -148,12 +152,10 @@ List<OcrResult> runOcrPipeline({
         for (int i = 0; i < detected.count; i++) {
           final item = detected.items[i];
           final box = List<double>.generate(
-              8, (j) => item.box[j] / (v.scale == 1.0 ? 1.0 : v.scale));
-          allBoxes.add((
-            box: box,
-            branch: item.branchIndex,
-            score: item.score,
-          ));
+            8,
+            (j) => item.box[j] / (v.scale == 1.0 ? 1.0 : v.scale),
+          );
+          allBoxes.add((box: box, branch: item.branchIndex, score: item.score));
         }
       } finally {
         if (ownsPtr) calloc.free(voPtr);
@@ -191,9 +193,9 @@ List<OcrResult> runOcrPipeline({
       // 不改变任何选择结果。
       final perVariant =
           List<List<({String text, double confidence})>>.generate(
-        variants.length,
-        (_) => List.filled(merged.count, (text: '', confidence: 0.0)),
-      );
+            variants.length,
+            (_) => List.filled(merged.count, (text: '', confidence: 0.0)),
+          );
       for (int vi = 0; vi < variants.length; vi++) {
         final v = variants[vi];
         if (!v.recSource) continue;
@@ -267,14 +269,15 @@ List<OcrResult> runOcrPipeline({
         }
         if (bestText.isEmpty) continue;
 
-        results.add(OcrResult(
-          box: [
-            for (int j = 0; j < 4; j++)
-              Offset(box8[j * 2], box8[j * 2 + 1]),
-          ],
-          text: bestText,
-          confidence: bestConf,
-        ));
+        results.add(
+          OcrResult(
+            box: [
+              for (int j = 0; j < 4; j++) Offset(box8[j * 2], box8[j * 2 + 1]),
+            ],
+            text: bestText,
+            confidence: bestConf,
+          ),
+        );
       }
       return results;
     } finally {

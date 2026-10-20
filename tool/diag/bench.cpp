@@ -6,6 +6,7 @@
 //
 // 环境变量：
 //   PP_OCR_BENCH_PRESET  预设编号：3=surveillance 5=max_recall 0=默认单分支
+//   PP_OCR_BENCH_BRANCHES 覆盖分支位掩码（十进制或 0x 十六进制）
 //   PP_OCR_BENCH_ROUNDS  每张图重复次数（默认 3）
 //   PP_OCR_TIMING        设 1 打开引擎分阶段计时（pipeline/det/rec）
 //
@@ -94,6 +95,12 @@ int main(int argc, char** argv) {
     printf("\n== %s (%dx%d)\n", path.c_str(), src.cols, src.rows);
 
     po::OcrOptions opts = po::MakePresetOptions(preset);
+    if (const char* br_env = std::getenv("PP_OCR_BENCH_BRANCHES")) {
+      opts.merge.branches = static_cast<uint32_t>(
+          std::strtoul(br_env, nullptr, 0));
+      po::SanitizeOptions(&opts);
+      printf("   branches=%s\n", po::BranchFlagsName(opts.merge.branches).c_str());
+    }
     std::string first_sig;
     double best = 1e18, sum = 0.0;
     size_t nregions = 0;

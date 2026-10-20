@@ -219,6 +219,10 @@ class OcrEngine {
     float ratio_h = 1.0f;              // 分支图 → 检测输入的缩放比
     float ratio_w = 1.0f;
     double scale = 1.0;                // image 相对原图的缩放系数
+    // 是否为「放大分支」（预处理放大倍数 > 1，典型：upscale2x/3x）。
+    // 这类分支的整图检测开销按面积平方级增长（2x=4 倍、3x=9 倍），
+    // 因此只在基础分支检出的 ROI 内检测，见 RunPipeline 步骤 1d。
+    bool detail = false;
     uint32_t flag = 0;                 // 对应的 BranchFlag
     // 本分支在 BuildBranchConfigs 结果里的下标。MergedBox::branches 里
     // 记的就是它（来自 DetectedBox::branch_index）；当某路预处理产出空

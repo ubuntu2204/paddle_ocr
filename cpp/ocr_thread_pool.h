@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <functional>
 #include <thread>
 #include <vector>
@@ -23,6 +24,26 @@ namespace paddle_ocr {
 // ===========================================================================
 constexpr size_t kMaxBranchThreads = 2;
 constexpr size_t kMaxRegionThreads = 12;
+
+// 诊断用环境变量覆盖（调参/定位并发退化时用，不设则用上面的常量）：
+//   PP_OCR_BRANCH_THREADS  分支预处理/检测的并行度
+//   PP_OCR_REGION_THREADS  区域（变体）识别的并行度
+//   PP_OCR_REC_THREADS     ORT 会话的 intra-op 线程数（检测/识别共用）
+inline size_t EnvThreadOverride(const char* name, size_t fallback) {
+  const char* v = std::getenv(name);
+  if (v == nullptr || v[0] == '\0') return fallback;
+  const long n = std::strtol(v, nullptr, 10);
+  if (n <= 0) return fallback;
+  return static_cast<size_t>(n);
+}
+
+// 实际使用的并行度（环境变量优先）。
+inline size_t BranchThreads() {
+  return EnvThreadOverride("PP_OCR_BRANCH_THREADS", kMaxBranchThreads);
+}
+inline size_t RegionThreads() {
+  return EnvThreadOverride("PP_OCR_REGION_THREADS", kMaxRegionThreads);
+}
 
 // ===========================================================================
 // 极简并行 for：把 [0, count) 下标分给一组临时线程执行 fn(i)。
@@ -78,9 +99,12 @@ inline void ParallelFor(size_t count, const std::function<void(size_t)>& fn,
 // 单次 Run 的并发 Run 调用共享同一会话的线程池，不会超订。
 inline int SessionThreadCount() {
   unsigned hw = std::thread::hardware_concurrency();
-  if (hw == 0) return 4;
-  unsigned t = std::max(2u, std::min(8u, hw / 2));
-  return static_cast<int>(t);
+  int fallback = 4;
+  if (hw != 0) {
+    fallback = static_cast<int>(std::max(2u, std::min(8u, hw / 2)));
+  }
+  return static_cast<int>(EnvThreadOverride("PP_OCR_REC_THREADS",
+                                            static_cast<size_t>(fallback)));
 }
 
 }  // namespace paddle_ocr

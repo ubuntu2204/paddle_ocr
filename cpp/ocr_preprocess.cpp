@@ -1097,7 +1097,17 @@ double VariantSelectionScore(int32_t mode, const std::string& text,
     const double actual_em = EstimateTextWidthInEm(text);
     const double fill = actual_em / expected_em;
     // fill 偏离 1.0 越远越差；置信度与长度只当平手时的次级排序。
-    const double penalty = std::min(std::abs(fill - 1.0), 5.0);
+    //
+    // 死区 ±10%：expected_em 由「区域长短边比 × 字宽经验表」推得，本身
+    // 就有约 ±10% 的误差（CJK 记 1.0 em、ASCII 记 0.6 em 只是平均值）。
+    // 而「少读一个字」与「读全整行」的 fill 差往往只有 5~15% —— 如果没有
+    // 死区，读全的那一行会因为 fill 略大于 1 而扣分，反而输给读少一个字的
+    // 候选（监控字幕行首「一」被并进「舍」时必现）。死区内视为完全契合，
+    // 超出部分才按 1:1 扣分，「读油了」的乱码依然会被重罚。
+    const double kFillTolerance = 0.10;
+    const double dev = std::abs(fill - 1.0);
+    const double penalty =
+        dev <= kFillTolerance ? 0.0 : std::min(dev - kFillTolerance, 5.0);
     return (5.0 - penalty) + 0.05 * confidence +
            0.001 * static_cast<double>(len);
   };
