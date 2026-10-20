@@ -349,7 +349,7 @@ typedef _RecognizeBoxesBytesDart =
 
 /// pp_ocr 原生库的底层 FFI 绑定。
 ///
-/// 支持 Windows 与 Linux；macOS 目前回退至 MethodChannel。
+/// 仅支持 Windows 与 Linux；其他平台加载即抛 UnsupportedError。
 class PpOcrFfiBindings {
   PpOcrFfiBindings._(this._dylib);
 

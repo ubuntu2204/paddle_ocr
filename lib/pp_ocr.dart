@@ -55,8 +55,9 @@ import 'src/ocr_result.dart';
 ///
 /// 基于 ONNX Runtime C++ 推理引擎提供离线文字检测与识别能力。
 ///
-/// 默认使用 FFI（dart:ffi）直接调用原生库，当 FFI DLL 不可用时
-/// 会自动回退到 MethodChannel 实现。
+/// 识别链路只走 FFI（dart:ffi 直连原生库）——整图字节跨 MethodChannel
+/// 序列化的开销不可接受，没有回退路径；原生库不可用时直接抛错。
+/// MethodChannel 仅承载 FFI 做不到的事（原生文件对话框、平台版本查询）。
 class PaddleOcr {
   /// 平台实现实例，延迟初始化。
   PaddleOcrPlatform? _platform;

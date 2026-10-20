@@ -2,7 +2,7 @@
 
 本示例演示了如何使用 `pp_ocr` 插件在 Flutter Windows 桌面应用中完成离线文字识别（OCR）。
 
-示例应用基于 PaddleOCR 的 **PP-OCRv6** 模型，通过 ONNX Runtime 在本地进行推理，无需联网即可识别图片中的中英文文字。插件默认使用 `dart:ffi` 直接调用原生 C++ 引擎以获得更低的延迟，当 FFI 动态库不可用时会自动回退到 `MethodChannel` 后端。ONNX Runtime 与 OpenCV 已内置在插件中，无需额外下载或配置。
+示例应用基于 PaddleOCR 的 **PP-OCRv6** 模型，通过 ONNX Runtime 在本地进行推理，无需联网即可识别图片中的中英文文字。识别链路完全通过 `dart:ffi` 直接调用原生 C++ 引擎以获得更低的延迟，无回退路径（原生库不可用时直接报错）；`MethodChannel` 仅用于原生文件选择对话框与平台版本查询。ONNX Runtime 已内置在插件中，无需额外下载或配置。
 
 ## 环境要求
 

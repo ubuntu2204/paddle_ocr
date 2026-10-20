@@ -7,7 +7,7 @@ A Flutter plugin for offline OCR (Optical Character Recognition) on Windows and 
 ## Features
 
 - **Offline OCR** — No internet connection required. All inference runs locally.
-- **Dual Backend** — Uses `dart:ffi` by default for low-latency direct native calls, with automatic fallback to `MethodChannel`.
+- **FFI-Only Recognition** — Every OCR call goes through `dart:ffi` directly (no serialization round-trip, no fallback path). `MethodChannel` remains solely for the native file picker and platform version queries.
 - **Text Detection** — DB (Differentiable Binarization) based text detection.
 - **Text Recognition** — CRNN + CTC based text recognition with support for Chinese, English, and 18,000+ characters.
 - **Unicode Path Support** — Correctly handles non-ASCII file paths (Chinese, Japanese, etc.) on Windows.
@@ -277,31 +277,30 @@ FFI cannot do: the native file picker and platform version queries.
 │         └──────┬──────────────┬───────┘      │
 │                │              │              │
 │     ┌──────────▼──┐  ┌───────▼────────┐     │
-│     │ FfiPaddleOcr│  │MethodChannel   │     │
-│     │ (default)   │  │PaddleOcr       │     │
-│     │ dart:ffi    │  │ (fallback)     │     │
-│     └──────┬──────┘  └───────┬────────┘     │
-│            │                 │              │
-└────────────┼─────────────────┼──────────────┘
-             │                 │
-     ┌───────▼───────┐  ┌──────▼──────────┐
-     │ pp_ocr_ffi.h  │  │ paddle_ocr_     │
-     │ pp_ocr_ffi.cpp│  │ plugin.cpp      │
-     │ (C API)       │  │ (MethodChannel) │
-     └───────┬───────┘  └──────┬──────────┘
-             │                 │
-             └────────┬────────┘
-                      │
-              ┌───────▼───────┐
-              │  ocr_engine   │
-              │  .cpp/.h      │
-              │  (OCR core)   │
-              └───────┬───────┘
-                      │
-           ┌──────────┴──────────┐
-           │ONNX Runtime+ OpenCV │
-           │(bundled)            │
-           └─────────────────────┘
+│     │ FfiPaddleOcr│  │PluginChannel   │     │
+│     │ (all OCR)   │  │PaddleOcr       │     │
+│     │ dart:ffi    │  │ (picker /      │     │
+│     │             │  │  version only) │     │
+│     └──────┬──────┘  └────────────────┘     │
+│            │                                 │
+└────────────┼─────────────────────────────────┘
+             │
+     ┌───────▼───────┐
+     │ pp_ocr_ffi.h  │
+     │ pp_ocr_ffi.cpp│
+     │ (C API)       │
+     └───────┬───────┘
+             │
+     ┌───────▼───────┐
+     │  ocr_engine   │
+     │  .cpp/.h      │
+     │  (OCR core)   │
+     └───────┬───────┘
+             │
+   ┌─────────┴─────────┐
+   │ONNX Runtime+OpenCV│
+   │(bundled)          │
+   └───────────────────┘
 ```
 
 ## License
