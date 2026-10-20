@@ -8,7 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:pp_ocr/pp_ocr.dart';
 
 /// 应用版本号（与根 pubspec.yaml 的 version 保持同步）。
-const String kAppVersion = '0.5.2';
+const String kAppVersion = '0.5.3';
 
 /// 应用程序入口函数
 void main() {
@@ -127,8 +127,11 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   /// 自动化自检入口。
   ///
   /// 当环境变量 `PP_OCR_SELFTEST_IMAGE` 指向一个可读的图片时，
-  /// 启动后自动执行 initialize → recognizeImage，完全跳过需要人工
-  /// 交互的 pickImage 分支，便于无头环境复现问题。
+  /// 启动后自动执行 initialize → recognizeImage → recognizeImageBytes →
+  /// runPipeline，完全跳过需要人工交互的 pickImage 分支，便于无头
+  /// 环境复现问题。其中 runPipeline 覆盖 Dart 编排管线（预处理插件
+  /// 接口 + 四个原子 FFI 接口），与 recognizeImage 的原生内部管线
+  /// 是两条独立链路。
   void _maybeStartSelfTest() {
     final selfTestImage = Platform.environment['PP_OCR_SELFTEST_IMAGE'];
     if (selfTestImage == null || selfTestImage.isEmpty) return;
@@ -225,6 +228,71 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
       // ignore: avoid_print
       print('[SELFTEST] step 5 done: ${results2.length} results');
 
+      // ignore: avoid_print
+      print('[SELFTEST] step 6: _ocr.runPipeline');
+      // Dart 编排管线（预处理插件接口）：每路变体走
+      // preprocessBytes → detectBytes → mergeBoxes → recognizeBoxesBytes
+      // 四个原子 FFI 接口，与 step 4/5 的原生内部管线是两条不同链路。
+      // 这里固定跑一轮 surveillance 同款变体组合，覆盖原子接口的
+      // 出参结构体快照路径（曾经因 .ref 视图语义 + free 顺序导致
+      // use-after-free 段错误，见 CHANGELOG 0.5.3）。
+      const pipelinePreprocessors = <OcrPreprocessor>[
+        NativeTransformPreprocessor(
+          OcrTransformParams(scalePercent: 200),
+          name: 'upscale2x',
+          scale: 2.0,
+        ),
+        NativeTransformPreprocessor(
+          OcrTransformParams(scalePercent: 300),
+          name: 'upscale3x',
+          scale: 3.0,
+        ),
+        NativeTransformPreprocessor(
+          OcrTransformParams(
+            enhanceMode: EnhanceMode.clahe,
+            claheClipLimit: 3.0,
+          ),
+          name: 'clahe',
+        ),
+        NativeTransformPreprocessor(
+          OcrTransformParams(
+            binarizeMode: BinarizeMode.adaptiveGaussianInverted,
+            colorMode: ColorMode.gray3,
+          ),
+          name: 'adaptive_bin',
+          recSource: false,
+        ),
+        NativeTransformPreprocessor(
+          OcrTransformParams(
+            enhanceMode: EnhanceMode.whiteText,
+            binarizeMode: BinarizeMode.adaptiveGaussianInverted,
+            adaptiveBlockSize: 21,
+            adaptiveC: 8.0,
+            colorMode: ColorMode.gray3,
+          ),
+          name: 'white_text',
+          recSource: false,
+        ),
+        NativeTransformPreprocessor(
+          OcrTransformParams(enhanceMode: EnhanceMode.denoiseClahe),
+          name: 'denoise_clahe',
+        ),
+      ];
+      final pipelineResults = await _ocr.runPipeline(
+        bytes,
+        pipelinePreprocessors,
+        options: selfTestOptions,
+      );
+      for (var i = 0; i < pipelineResults.length; i++) {
+        // ignore: avoid_print
+        print(
+          '[SELFTEST]   pipeline[$i] conf=${pipelineResults[i].confidence.toStringAsFixed(3)}'
+          ' "${pipelineResults[i].text}"',
+        );
+      }
+      // ignore: avoid_print
+      print('[SELFTEST] step 6 done: ${pipelineResults.length} results');
+
       setState(() {
         _imagePath = path;
         _imageWidth = decoded.width.toDouble();
@@ -233,7 +301,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
         _statusMessage =
             '[SELFTEST] OK: '
             'file=${bytes.length}B decoded=${decoded.width}x${decoded.height} '
-            'results=${results.length}/${results2.length}';
+            'results=${results.length}/${results2.length} '
+            'pipeline=${pipelineResults.length}';
       });
       // ignore: avoid_print
       print('[SELFTEST] ALL STEPS PASSED');

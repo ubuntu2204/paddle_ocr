@@ -503,7 +503,20 @@ class PpOcrFfiBindings {
   }
 
   /// 原子 2：文本检测。失败返回 null（用 getLastError 取原因）。
-  PpOcrBoxArrayC? detectBytes(
+  ///
+  /// 返回的是「字段快照」而不是 FFI 结构体值：
+  /// [Pointer<Struct>.ref] 在 dart:ffi 里的语义是**视图**（SDK 文档原话
+  /// "A Dart view of the struct referenced by this pointer... backed by
+  /// native memory at address"），并不是拷贝。若 `return out.ref` 之后再把
+  /// `out` free 掉，调用方读到的就是已被 malloc 复用的野内存 —— 字段会随
+  /// 机变成垃圾值，进而在 Dart 侧解引用 `items` 时 SIGSEGV（崩溃 PC 落在
+  /// JIT code 区，极易误诊为「Dart print/libc write」）。
+  /// 因此所有出参结构体都必须在 free 之前把字段读成 Dart 值 / 引擎持有的
+  /// 指针（引擎缓冲区按 ABI 约定「下一次调用前有效」）。
+  ///
+  /// [items] 指向引擎持有的框数组，在下一次调用本引擎任何接口前有效。
+  ({Pointer<PpOcrBoxInputC> items, int count, int imageWidth, int imageHeight})?
+      detectBytes(
     Pointer<Void> engine,
     Uint8List bytes,
     Pointer<PpOcrOptionsC> options,
@@ -515,7 +528,13 @@ class PpOcrFfiBindings {
       if (_detectBytes(engine, ptr, bytes.length, options, out) == 0) {
         return null;
       }
-      return out.ref;
+      // free 之前取快照（见上方关于 .ref 视图语义的说明）。
+      return (
+        items: out.ref.items,
+        count: out.ref.count,
+        imageWidth: out.ref.imageWidth,
+        imageHeight: out.ref.imageHeight,
+      );
     } finally {
       calloc.free(ptr);
       calloc.free(out);
@@ -523,7 +542,10 @@ class PpOcrFfiBindings {
   }
 
   /// 原子 3：合并多路检测框为识别窗。失败返回 null。
-  PpOcrBoxArrayC? mergeBoxes(
+  ///
+  /// 同样返回字段快照而非结构体视图，原因见 [detectBytes] 的文档。
+  ({Pointer<PpOcrBoxInputC> items, int count, int imageWidth, int imageHeight})?
+      mergeBoxes(
     Pointer<Void> engine,
     Pointer<PpOcrBoxInputC> boxes,
     int count,
@@ -538,7 +560,12 @@ class PpOcrFfiBindings {
           0) {
         return null;
       }
-      return out.ref;
+      return (
+        items: out.ref.items,
+        count: out.ref.count,
+        imageWidth: out.ref.imageWidth,
+        imageHeight: out.ref.imageHeight,
+      );
     } finally {
       calloc.free(out);
     }

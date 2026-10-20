@@ -1,3 +1,40 @@
+## 0.5.3（修复 runPipeline 段错误）
+
+**修复 `PaddleOcr.runPipeline`（Dart 编排管线）必现段错误**：崩在 Dart 侧，
+进程直接 SIGSEGV（无任何 Dart 异常），PC 落在 JIT code 区，极易误诊为
+「Dart print / libc write」。
+
+* 根因：`dart:ffi` 的 `Pointer<Struct>.ref` 语义是**视图而非拷贝**
+  （SDK 文档原话 "A Dart view of the struct referenced by this pointer...
+  backed by native memory at address"）。`pp_ocr_ffi_bindings.dart` 的
+  `detectBytes` / `mergeBoxes` 写成 `return out.ref` 后由 `finally` 里
+  `calloc.free(out)` —— 调用方拿到的结构体字段读的是已释放内存；随后任何
+  malloc 复用该 32 字节 chunk（下一次变体检测的大量小分配），字段即变成
+  垃圾值（`count` 变负数/巨数、`items` 变未映射地址），Dart 侧
+  `detected.items[i]` 解引用野指针 → SIGSEGV。原生函数**按值返回**结构体
+  （`recognizeFile` 等）由 VM 拷进新 compound，不受影响；同一文件里
+  `preprocessBytes` / `recognizeBoxBytes` / `recognizeBoxesBytes` 因为在
+  free 前已把字段读成 Dart 值 / 引擎持有的指针，同样不受影响。
+* 修复：`detectBytes` / `mergeBoxes` 改为在 free 之前返回**字段快照**
+  （Dart record：`items` / `count` / `imageWidth` / `imageHeight`），
+  `items` 仍指向引擎持有的框数组（按 ABI 约定「下一次引擎调用前有效」，
+  `runOcrPipeline` 的读取时机原本就满足）。调用点字段名不变。
+* 新增回归护栏：
+  * example selftest（`PP_OCR_SELFTEST_IMAGE`）新增 step 6 跑
+    `runPipeline`（surveillance 同款 6 路变体），覆盖四个原子 FFI 接口
+    的快照路径；
+  * `example/integration_test` 新增 `runPipeline (Dart orchestration)
+    does not crash`：自带最小灰度 PNG 生成器（zlib stored 块、无第三方
+    依赖），白底黑横带保证 detect/merge 带真实数据执行。
+* 顺手修正集成测试里 3 个过时期望（FFI-only 契约落地后一直红，与本次
+  无关）：`getPlatformVersion` 接受 `pp_ocr x.y.z` 原生版本串；
+  `initialize` 失败路径返回 `false` 而非抛 `PlatformException`；
+  `recognizeImageBytes` 未初始化用例改传真 `Uint8List`（原先传
+  `List<int> as dynamic` 触发同步类型错误，掩盖了被测路径）。
+* 验证：主包 66 单测全过；example 集成测试 8/8 全过（含新回归用例，
+  干净树上对照确认 3 个失败为预先存在）；example build linux ✓；
+  监控帧 selftest 六步全过，`runPipeline` 稳定输出识别结果。
+
 ## 0.1.0
 
 * Initial release.

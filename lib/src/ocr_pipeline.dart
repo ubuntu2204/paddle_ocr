@@ -143,6 +143,8 @@ List<OcrResult> runOcrPipeline({
           baseW = detected.imageWidth;
           baseH = detected.imageHeight;
         }
+        // detected.items 由引擎持有，在下一次引擎调用前有效 —— 这里紧跟
+        // detectBytes 之后读取，之后不会再调用引擎接口，安全。
         for (int i = 0; i < detected.count; i++) {
           final item = detected.items[i];
           final box = List<double>.generate(
