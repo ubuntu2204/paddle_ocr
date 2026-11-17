@@ -13,7 +13,13 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@v4
-      - uses: dart-lang/setup-dart@v1
+      # pp_ocr 依赖 Flutter SDK（flutter/plugin 声明），必须装 Flutter 再发布：
+      # 仅装 Dart 时 `dart pub publish` 会在依赖解析阶段报
+      # "requires the Flutter SDK, version solving failed"。
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.9'
       - env:
           PUB_CREDENTIALS_B64: ${{ secrets.PUB_CREDENTIALS_B64 }}
         run: |
@@ -25,7 +31,7 @@ jobs:
         id: publish
         run: |
           set -o pipefail
-          dart pub publish --force 2>&1 | tee /tmp/publish.log
+          flutter pub publish --force 2>&1 | tee /tmp/publish.log
           exit "${PIPESTATUS[0]}"
       - name: Publish diagnostic
         if: always()
