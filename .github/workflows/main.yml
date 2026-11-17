@@ -8,6 +8,9 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
@@ -19,14 +22,34 @@ jobs:
           chmod 600 ~/.config/dart/pub-credentials.json
           echo "credential_bytes=$(wc -c < ~/.config/dart/pub-credentials.json)"
       - name: Publish
+        id: publish
         run: |
           set -o pipefail
           dart pub publish --force 2>&1 | tee /tmp/publish.log
-          status=${PIPESTATUS[0]}
-          {
-            echo '### pub publish output'
-            echo '```'
-            tail -60 /tmp/publish.log
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$status"
+          exit "${PIPESTATUS[0]}"
+      - name: Publish diagnostic
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          log = open('/tmp/publish.log', errors='replace').read() if os.path.exists('/tmp/publish.log') else '(no log)'
+          size = os.path.getsize(os.path.expanduser('~/.config/dart/pub-credentials.json')) if os.path.exists(os.path.expanduser('~/.config/dart/pub-credentials.json')) else -1
+          summary = 'credential_bytes: %s\n\n```\n%s\n```' % (size, log[-6000:])
+          body = json.dumps({
+              'name': 'publish-diagnostic',
+              'head_sha': os.environ['GITHUB_SHA'],
+              'status': 'completed',
+              'conclusion': 'neutral',
+              'output': {'title': 'pub publish diagnostic', 'summary': summary},
+          }).encode()
+          req = urllib.request.Request(
+              'https://api.github.com/repos/%s/check-runs' % os.environ['GITHUB_REPOSITORY'],
+              data=body,
+              headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                       'Accept': 'application/vnd.github+json',
+                       'Content-Type': 'application/json'},
+          )
+          urllib.request.urlopen(req).read()
+          PY
