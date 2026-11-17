@@ -1,4 +1,5 @@
-import 'dart:ui';
+// Flutter 下使用 dart:ui.Offset；纯 Dart 后端用轻量替身，避免 dart:ui 依赖。
+import 'dart_offset.dart' if (dart.library.ui) 'dart:ui' show Offset;
 
 /// 表示单个 OCR 检测结果，包含边界框、文本内容和置信度。
 class OcrResult {

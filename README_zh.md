@@ -164,6 +164,44 @@ ocr.dispose();
 
 完整示例请参考 [example 应用](example/)，包含图片选择器、预设选择器和检测框可视化叠加。
 
+### 在 Dart 后端直接调用
+
+识别链路 100% 走 `dart:ffi`，不需要 Flutter 引擎：在没有 `dart:ui` 的纯 Dart
+运行时（`dart run` / `dart compile exe`）里，`Offset` 与 MethodChannel 会自动
+切换到内置的无 Flutter 替身，识别结果与 Flutter 端完全一致。
+
+```dart
+import 'package:pp_ocr/pp_ocr.dart';
+import 'package:pp_ocr/src/pp_ocr_ffi_bindings.dart';
+
+void main() async {
+  // 后端部署时原生库不一定与可执行文件同目录，启动时显式指定一次
+  // （也可设环境变量 PP_OCR_LIBRARY_PATH，值为库文件或所在目录）。
+  PpOcrFfiBindings.setLibraryPath('/opt/app/lib'); // 或具体到 .so/.dll 文件
+
+  final ocr = PaddleOcr();
+  await ocr.initialize(
+    detModelPath: '/opt/app/model/det.onnx',
+    recModelPath: '/opt/app/model/inference.onnx',
+    dictPath: '/opt/app/model/ppocr_v6_dict.txt',
+  );
+  final lines = await ocr.recognizeImage('/tmp/frame.png');
+  for (final r in lines) {
+    print('${r.text} @ ${r.box.first.dx},${r.box.first.dy}');
+  }
+  ocr.dispose();
+}
+```
+
+未显式指定路径时的查找顺序：裸库名（`LD_LIBRARY_PATH` / Flutter 产物的
+`$ORIGIN` RPATH）→ 可执行文件同目录 → 当前工作目录。`pickImage()` 依赖
+Flutter 插件注册器，纯 Dart 下调用会抛 `UnsupportedError`，直接传图片路径
+给 `recognizeImage()` 即可。
+
+> 依赖解析仍使用 Flutter SDK（pubspec 保留 `flutter` 依赖以通过 pub.dev
+> 校验与 Flutter 插件构建），但后端部署产物是无 Flutter 运行时的 AOT 二进制。
+> 用 `dart test test/dart_compat_test.dart` 可单独验证纯 Dart 路径。
+
 ### 识别结果不全（白字压复杂背景）
 
 当一行字是**压在杂乱背景上的白字**（监控叠加字幕、路牌、低对比扫描件）时，

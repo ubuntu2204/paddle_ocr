@@ -170,6 +170,47 @@ for (final result in results) {
 ocr.dispose();
 ```
 
+### Using from a pure Dart backend
+
+Recognition is 100% `dart:ffi` — no Flutter engine is involved. When there is no
+`dart:ui` (plain `dart run` / `dart compile exe`), `Offset` and the MethodChannel
+bridge automatically fall back to built-in Flutter-free implementations, with
+identical recognition results.
+
+```dart
+import 'package:pp_ocr/pp_ocr.dart';
+import 'package:pp_ocr/src/pp_ocr_ffi_bindings.dart';
+
+void main() async {
+  // In a backend deployment the native library is rarely next to the exe;
+  // point at it once at startup (or set PP_OCR_LIBRARY_PATH to the library
+  // file / its directory).
+  PpOcrFfiBindings.setLibraryPath('/opt/app/lib');
+
+  final ocr = PaddleOcr();
+  await ocr.initialize(
+    detModelPath: '/opt/app/model/det.onnx',
+    recModelPath: '/opt/app/model/inference.onnx',
+    dictPath: '/opt/app/model/ppocr_v6_dict.txt',
+  );
+  for (final r in await ocr.recognizeImage('/tmp/frame.png')) {
+    print('${r.text} @ ${r.box.first.dx},${r.box.first.dy}');
+  }
+  ocr.dispose();
+}
+```
+
+Without an explicit path the lookup order is: bare library name
+(`LD_LIBRARY_PATH` / Flutter's `$ORIGIN` RPATH) → executable directory → current
+working directory. `pickImage()` needs the Flutter plugin registrar and throws
+`UnsupportedError` in pure Dart; pass the image path to `recognizeImage()`
+instead.
+
+> Dependency resolution still uses the Flutter SDK (the `flutter` dependency is
+> kept for pub.dev validation and Flutter plugin builds), but the deployed
+> backend is an AOT binary with no Flutter runtime. Run
+> `dart test test/dart_compat_test.dart` to check the pure-Dart path alone.
+
 ### Recognizing text that comes out incomplete
 
 If a line is rendered as **white text over a busy background** (surveillance overlay

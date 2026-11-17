@@ -1,6 +1,6 @@
 name: pp_ocr
 description: "Flutter plugin for offline OCR using PP-OCRv6 (PaddleOCR) with ONNX Runtime C++ inference. Supports text detection and recognition on Windows and Linux."
-version: 0.5.4
+version: 0.5.5
 homepage: https://github.com/ubuntu2204/paddle_ocr
 repository: https://github.com/ubuntu2204/paddle_ocr
 issue_tracker: https://github.com/ubuntu2204/paddle_ocr/issues
@@ -19,6 +19,8 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  # 纯 Dart 后端（dart run / dart compile exe）的兼容性回归测试。
+  test: ^1.25.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

@@ -356,6 +356,24 @@ class PpOcrFfiBindings {
   /// 单例实例。
   static PpOcrFfiBindings? _instance;
 
+  /// 显式指定的原生库路径（完整文件路径或所在目录）。
+  static String? _libraryPath;
+
+  /// 指定原生库路径，供纯 Dart 后端（`dart run` / `dart compile exe`）部署时使用。
+  ///
+  /// 必须在首次 FFI 调用（第一次访问 [instance]）之前设置，否则原生库已经
+  /// 加载完成，再设置无效并抛出 [StateError]。参数是动态库文件本身或它
+  /// 所在的目录。环境变量 `PP_OCR_LIBRARY_PATH` 等价于本方法，但优先级更低。
+  static void setLibraryPath(String path) {
+    if (_instance != null) {
+      throw StateError(
+        'pp_ocr native library is already loaded; setLibraryPath() must be '
+        'called before the first OCR call.',
+      );
+    }
+    _libraryPath = path;
+  }
+
   /// 获取单例实例，首次访问时加载 DLL。
   static PpOcrFfiBindings get instance {
     _instance ??= PpOcrFfiBindings._(_loadLibrary());
@@ -369,18 +387,58 @@ class PpOcrFfiBindings {
   ///
   /// 支持 Windows（pp_ocr_plugin.dll）和 Linux（libpp_ocr_plugin.so）。
   /// macOS/Android/iOS 目前尚未实现。
+  ///
+  /// 查找顺序：
+  /// 1. [setLibraryPath] / `PP_OCR_LIBRARY_PATH` 指定路径（文件或目录）；
+  /// 2. 裸库名 —— Flutter 产物由 linux/CMakeLists.txt 的 `$ORIGIN` RPATH
+  ///    定位，或系统 `LD_LIBRARY_PATH` / `PATH` 已配置；
+  /// 3. 可执行文件同目录、当前工作目录 —— 纯 Dart AOT 后端的常见布局。
   static DynamicLibrary _loadLibrary() {
-    if (Platform.isWindows) {
-      return DynamicLibrary.open('pp_ocr_plugin.dll');
+    if (!Platform.isWindows && !Platform.isLinux) {
+      throw UnsupportedError('pp_ocr FFI only supports Windows and Linux');
     }
-    if (Platform.isLinux) {
-      // Flutter Linux 插件产物名由 linux/CMakeLists.txt 的 PLUGIN_NAME
-      // 决定（pp_ocr_plugin），默认共享库文件名为 libpp_ocr_plugin.so。
-      // 应用发布后与可执行文件同层交付，通过 $ORIGIN RPATH 定位，
-      // 因此直接以文件名 open 即可。
-      return DynamicLibrary.open('libpp_ocr_plugin.so');
+    final libraryName = Platform.isWindows
+        ? 'pp_ocr_plugin.dll'
+        : 'libpp_ocr_plugin.so';
+
+    final configured =
+        _libraryPath ?? Platform.environment['PP_OCR_LIBRARY_PATH'];
+    final candidates = <String>[];
+    if (configured != null && configured.isNotEmpty) {
+      // 显式路径只认这一处，避免悄悄加载到另一个版本的库。
+      candidates.add(
+        Directory(configured).existsSync()
+            ? _joinPath(configured, libraryName)
+            : configured,
+      );
+    } else {
+      candidates.add(libraryName);
+      candidates.add(_joinPath(_dirName(Platform.resolvedExecutable), libraryName));
+      candidates.add(_joinPath(Directory.current.path, libraryName));
     }
-    throw UnsupportedError('pp_ocr FFI only supports Windows and Linux');
+
+    Object? firstError;
+    for (final candidate in candidates) {
+      try {
+        return DynamicLibrary.open(candidate);
+      } catch (e) {
+        firstError ??= e;
+      }
+    }
+    throw StateError(
+      'Failed to load pp_ocr native library ($libraryName). '
+      'Tried: ${candidates.join(', ')}. Last error: $firstError. '
+      'Set PP_OCR_LIBRARY_PATH to the library file or its directory.',
+    );
+  }
+
+  static String _joinPath(String dir, String name) => dir.endsWith(Platform.pathSeparator)
+      ? '$dir$name'
+      : '$dir${Platform.pathSeparator}$name';
+
+  static String _dirName(String path) {
+    final index = path.lastIndexOf(Platform.pathSeparator);
+    return index < 0 ? '.' : path.substring(0, index);
   }
 
   late final _create = _dylib.lookupFunction<_CreateNative, _CreateDart>(

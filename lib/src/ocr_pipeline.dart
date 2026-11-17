@@ -1,6 +1,8 @@
 import 'dart:ffi';
 import 'dart:typed_data';
-import 'dart:ui';
+
+// 与 ocr_result.dart 保持同一个 Offset 类型来源。
+import 'dart_offset.dart' if (dart.library.ui) 'dart:ui' show Offset;
 
 import 'package:ffi/ffi.dart';
 

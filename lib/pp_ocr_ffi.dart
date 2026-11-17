@@ -1,10 +1,14 @@
 import 'dart:ffi';
 import 'dart:typed_data';
-import 'dart:ui';
+
+// Flutter 下继续用 dart:ui.Offset；纯 Dart 后端用自带替身。
+import 'src/dart_offset.dart' if (dart.library.ui) 'dart:ui' show Offset;
 
 import 'package:ffi/ffi.dart';
 
-import 'paddle_ocr_plugin_channel.dart';
+// 文件对话框/平台查询依赖 MethodChannel；纯 Dart 后端换成无 Flutter 的桩。
+import 'src/plugin_channel_stub.dart'
+    if (dart.library.ui) 'paddle_ocr_plugin_channel.dart';
 import 'paddle_ocr_platform_interface.dart';
 import 'src/ocr_options.dart';
 import 'src/ocr_pipeline.dart';

@@ -1,3 +1,15 @@
+## 0.5.5（纯 Dart 后端直连）
+
+- `Offset` 与 MethodChannel 改为条件导入：Flutter 构建仍用 `dart:ui.Offset`
+  与原生文件对话框；纯 Dart 运行时（`dart run` / `dart compile exe`）自动
+  切到内置替身，识别链路（FFI）与结果不变。
+- `PpOcrFfiBindings.setLibraryPath()` 与环境变量 `PP_OCR_LIBRARY_PATH`：
+  后端可显式指定原生库文件或所在目录；未指定时在裸库名之外增加「可执行文件
+  同目录 → 当前工作目录」兜底，加载失败时列出全部候选路径。
+- 新增 `test/dart_compat_test.dart`（`dart test test/dart_compat_test.dart`），
+  验证不依赖 Flutter 引擎即可构造 API 并读取 `OcrResult.box`。
+- README / README_zh 增补 Dart 后端调用示例与原生库定位说明。
+
 ## 0.5.4（识别速度优化：放大分支按 ROI 检测）
 
 监控字幕帧（1050×488）实测 **2.05s → 0.94s（-54%）**，目标行

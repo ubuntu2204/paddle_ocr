@@ -1,5 +1,7 @@
 import 'dart:developer' as developer;
 
+// Flutter-only 实现；纯 Dart 运行时由 pp_ocr_ffi.dart 的条件导入改走
+// src/plugin_channel_stub.dart，不会加载本文件。
 import 'package:flutter/services.dart';
 
 /// 依赖 Flutter 插件注册器的少量功能的 MethodChannel 通道。
