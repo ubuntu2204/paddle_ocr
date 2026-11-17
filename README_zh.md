@@ -109,7 +109,7 @@ flutter run -d linux
 
 ```yaml
 dependencies:
-  pp_ocr: ^0.4.0
+  pp_ocr: ^0.5.5
 ```
 
 ## 模型文件
@@ -201,6 +201,37 @@ Flutter 插件注册器，纯 Dart 下调用会抛 `UnsupportedError`，直接�
 > 依赖解析仍使用 Flutter SDK（pubspec 保留 `flutter` 依赖以通过 pub.dev
 > 校验与 Flutter 插件构建），但后端部署产物是无 Flutter 运行时的 AOT 二进制。
 > 用 `dart test test/dart_compat_test.dart` 可单独验证纯 Dart 路径。
+
+#### 手动验证清单（待测试人员执行）
+
+上面的纯 Dart 调用还没有在目标后端环境人工跑过，发布前请按以下步骤手动验证一次：
+
+1. 建一个纯 Dart 项目（不带 Flutter 依赖），`pubspec.yaml` 里先指向本地源码：
+   ```yaml
+   dependencies:
+     pp_ocr:
+       path: /path/to/paddle_ocr
+   ```
+2. 准备模型三件套（`det.onnx` / `inference.onnx` / `ppocr_v6_dict.txt`），
+   并把上面 `bin/main.dart` 示例中的路径改成实际位置。
+3. 指向**重新构建后的**原生库（确认库内版本为 `pp_ocr 0.5.5`），例如：
+   ```bash
+   PP_OCR_LIBRARY_PATH=/path/to/bundle/lib/libpp_ocr_plugin.so dart run bin/main.dart
+   ```
+4. 再验证 AOT 部署路径：
+   ```bash
+   dart compile exe bin/main.dart -o /tmp/ocr_probe
+   PP_OCR_LIBRARY_PATH=/path/to/bundle/lib /tmp/ocr_probe
+   ```
+5. 预期结果：
+   - 无 `dart:ui is not available` / `Flutter engine` 相关报错；
+   - `getPlatformVersion()` 返回 `pp_ocr 0.5.5`（与 `app v0.5.5` 对照一致）；
+   - 监控字幕帧仍读出完整目标行（如“一舍篮球场东北路口球G66-5724”）；
+   - 可选：`pickImage()` 抛 `UnsupportedError`，属预期行为。
+6. 另外跑一次 `dart test test/dart_compat_test.dart`。
+
+任何一步失败，请保留完整报错与 `Failed to load pp_ocr native library ... Tried:`
+后面的候选路径清单再反馈。
 
 ### 识别结果不全（白字压复杂背景）
 

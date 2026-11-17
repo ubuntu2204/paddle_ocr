@@ -211,6 +211,42 @@ instead.
 > backend is an AOT binary with no Flutter runtime. Run
 > `dart test test/dart_compat_test.dart` to check the pure-Dart path alone.
 
+#### Manual verification checklist (tester to run)
+
+The pure-Dart path above has **not** yet been exercised manually in the target
+backend environment. Please verify it once before release:
+
+1. Create a plain Dart project (no Flutter dependency) and point at the local
+   source first:
+   ```yaml
+   dependencies:
+     pp_ocr:
+       path: /path/to/paddle_ocr
+   ```
+2. Prepare the three model files (`det.onnx`, `inference.onnx`,
+   `ppocr_v6_dict.txt`) and replace the placeholder paths in `bin/main.dart`
+   above with real ones.
+3. Point at the **freshly rebuilt** native library (check it contains
+   `pp_ocr 0.5.5`), then run:
+   ```bash
+   PP_OCR_LIBRARY_PATH=/path/to/bundle/lib/libpp_ocr_plugin.so dart run bin/main.dart
+   ```
+4. Verify the AOT deployment path too:
+   ```bash
+   dart compile exe bin/main.dart -o /tmp/ocr_probe
+   PP_OCR_LIBRARY_PATH=/path/to/bundle/lib /tmp/ocr_probe
+   ```
+5. Expected:
+   - no `dart:ui is not available` / Flutter-engine errors;
+   - `getPlatformVersion()` returns `pp_ocr 0.5.5` (matching `app v0.5.5`);
+   - a surveillance-caption frame still yields the complete target line
+     (e.g. “一舍篮球场东北路口球G66-5724”);
+   - optionally, `pickImage()` throws `UnsupportedError` — expected in pure Dart.
+6. Also run `dart test test/dart_compat_test.dart`.
+
+If any step fails, include the full error and the `Tried:` candidate-path list
+from `Failed to load pp_ocr native library ...` in the report.
+
 ### Recognizing text that comes out incomplete
 
 If a line is rendered as **white text over a busy background** (surveillance overlay
